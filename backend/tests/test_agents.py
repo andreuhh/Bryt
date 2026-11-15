@@ -6,13 +6,14 @@ from datetime import UTC, date, datetime, time, timedelta
 
 import httpx
 import pytest
-from sqlmodel import select
+from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.agents.context import local_today
 from app.agents.llm import AgentUnavailableError, get_llm
 from app.agents.pipeline import get_pipeline_launcher, run_post_activity_pipeline
-from app.agents.training_periodization import generate_plan
+from app.agents.scheduler import get_plan_job_launcher
+from app.agents.training_periodization import build_plan, refine_plan, start_plan_generation
 from app.core.database import get_session
 from app.main import app
 from app.models import AgentExecutionLog, PersonalBest, TrainingPlan, User, Workout
@@ -22,19 +23,24 @@ from app.models.enums import (
     AgentRunStatus,
     AthleteBackground,
     PlanStatus,
+    RevisionSource,
+    RevisionStatus,
     Surface,
     TrainingSlot,
+    WorkoutDetail,
     WorkoutStatus,
     WorkoutType,
     WorkType,
 )
 from app.models.user import UserLifestyleProfile
 from app.schemas.agents import (
+    BlockWorkoutsOutput,
     CoachChatOutput,
     MechanicalLoadOutput,
     NutritionRecoveryOutput,
     PlanAdjustmentOutput,
-    PlanGenerationOutput,
+    PlanSkeletonOutput,
+    RefinementOutput,
 )
 from app.schemas.user import OnboardingPayload
 from app.services.calibration import compute_calibration, riegel_threshold_pace
@@ -44,11 +50,13 @@ from app.services.storage import LocalFitStorage
 from tests.agent_fakes import (
     FakeLLM,
     adjust_all,
+    block_workouts,
     chat_output,
     mechanical_output,
     no_adjustment_mechanical,
     nutrition_output,
-    plan_output,
+    refinement,
+    skeleton_output,
 )
 from tests.factories import profile_payload
 from tests.fit_builder import build_fit, synthetic_run
@@ -181,65 +189,174 @@ async def _ingest_today(
     return result.activity
 
 
-# --- Plan generation ----------------------------------------------------------------------
+# --- Plan generation (skeleton + blocks) -------------------------------------------------
 
 
-async def test_generate_plan_persists_and_archives_previous(
+def _queue_full_plan(llm: FakeLLM, plan: TrainingPlan) -> FakeLLM:
+    return llm.queue(PlanSkeletonOutput, skeleton_output(plan.start_date, plan.end_date)).queue(
+        BlockWorkoutsOutput, block_workouts(), block_workouts()
+    )
+
+
+async def _built_plan(session: AsyncSession, user: User) -> TrainingPlan:
+    plan = await start_plan_generation(session, user)
+    await build_plan(session, _queue_full_plan(FakeLLM(), plan), user, plan)
+    return plan
+
+
+async def _plan_workouts(session: AsyncSession, plan: TrainingPlan) -> list[Workout]:
+    stmt = select(Workout).where(Workout.plan_id == plan.id).order_by(col(Workout.scheduled_date))
+    return list((await session.exec(stmt)).all())
+
+
+async def test_build_plan_covers_every_day_with_detail_levels(
     session: AsyncSession, athlete: User
 ) -> None:
     today = local_today(athlete)
-    start = today + timedelta(days=1)
-    end = today + timedelta(weeks=16)
     old = TrainingPlan(
         user_id=athlete.id,
         name="Vecchio",
         status=PlanStatus.ACTIVE,
         methodology="TRADITIONAL",  # type: ignore[arg-type]
         start_date=today,
-        end_date=end,
+        end_date=today + timedelta(days=30),
     )
     session.add(old)
     await session.commit()
 
-    llm = FakeLLM().queue(PlanGenerationOutput, plan_output(start, end))
-    plan, workouts, log = await generate_plan(session, llm, athlete, start_date=start)
+    plan = await start_plan_generation(session, athlete)
+    assert plan.status == PlanStatus.GENERATING
+    assert plan.end_date == today + timedelta(weeks=16)  # race day from the profile
+    llm = _queue_full_plan(FakeLLM(), plan)
+    await build_plan(session, llm, athlete, plan)
 
-    assert plan.status == PlanStatus.ACTIVE and len(workouts) == 2
     await session.refresh(old)
-    assert old.status == PlanStatus.ARCHIVED
-    assert log.status == AgentRunStatus.SUCCESS and log.plan_id == plan.id
+    assert plan.status == PlanStatus.ACTIVE and old.status == PlanStatus.ARCHIVED
+    assert plan.last_refined_on == today
+    workouts = await _plan_workouts(session, plan)
+    expected_days = (plan.end_date - plan.start_date).days + 1
+    assert len({w.scheduled_date for w in workouts}) == expected_days == len(workouts)
 
-    ctx = llm.calls[0].context
-    assert ctx["calibration"]["threshold_pace_s_per_km"] == pytest.approx(247, abs=2)
-    assert "intervals_api_key" not in llm.calls[0].prompt
-    assert llm.calls[0].effort == "high"
+    horizon = today + timedelta(days=14)
+    for w in workouts:
+        confirmed = w.scheduled_date <= horizon
+        assert w.detail_level == (
+            WorkoutDetail.CONFIRMED if confirmed else WorkoutDetail.PROVISIONAL
+        )
+        assert w.is_key_session == (w.scheduled_date.weekday() == 6)
+        if w.workout_type == WorkoutType.THRESHOLD:
+            has_pace = w.structure[0].get("target_pace") is not None
+            assert has_pace == confirmed  # provisional sessions carry zones only
+
+    block_calls = llm.calls_for(BlockWorkoutsOutput)
+    assert block_calls[0].context["previous_block_last_week"] == []
+    assert len(block_calls[1].context["previous_block_last_week"]) == 7  # continuity
 
 
-async def test_generate_plan_repairs_domain_violations(
+async def test_build_plan_repairs_missing_day(session: AsyncSession, athlete: User) -> None:
+    plan = await start_plan_generation(session, athlete)
+    llm = (
+        FakeLLM()
+        .queue(PlanSkeletonOutput, skeleton_output(plan.start_date, plan.end_date))
+        .queue(
+            BlockWorkoutsOutput,
+            block_workouts(skip=plan.start_date + timedelta(days=3)),
+            block_workouts(),
+            block_workouts(),
+        )
+    )
+    await build_plan(session, llm, athlete, plan)
+    calls = llm.calls_for(BlockWorkoutsOutput)
+    assert len(calls) == 3 and "missing days" in calls[1].prompt
+    assert plan.status == PlanStatus.ACTIVE
+
+
+async def test_build_plan_failure_keeps_previous_plan(session: AsyncSession, athlete: User) -> None:
+    previous = await _built_plan(session, athlete)
+    plan = await start_plan_generation(session, athlete)
+    llm = (
+        FakeLLM()
+        .queue(PlanSkeletonOutput, skeleton_output(plan.start_date, plan.end_date))
+        .queue(BlockWorkoutsOutput, block_workouts(), AgentUnavailableError("rate limit"))
+    )
+    with pytest.raises(AgentUnavailableError):
+        await build_plan(session, llm, athlete, plan)
+
+    failed = await session.get(TrainingPlan, plan.id)
+    assert failed is not None and failed.status == PlanStatus.FAILED
+    assert "rate limit" in (failed.generation_error or "")
+    assert await _plan_workouts(session, failed) == []  # no half plan left behind
+    await session.refresh(previous)
+    assert previous.status == PlanStatus.ACTIVE
+
+
+# --- Weekly refinement & proposals --------------------------------------------------------
+
+
+async def _age_window(session: AsyncSession, plan: TrainingPlan, today: date) -> list[Workout]:
+    """Simulates time passing: the next 2 weeks become provisional again (paces stripped)."""
+    aged = []
+    for w in await _plan_workouts(session, plan):
+        if today < w.scheduled_date <= today + timedelta(days=14):
+            w.detail_level = WorkoutDetail.PROVISIONAL
+            w.structure = [
+                {k: v for k, v in s.items() if k not in ("target_pace", "target_hr")}
+                for s in w.structure
+            ]
+            session.add(w)
+            aged.append(w)
+    plan.last_refined_on = today - timedelta(days=7)
+    session.add(plan)
+    await session.commit()
+    return aged
+
+
+async def test_refine_confirms_window_and_proposes_far_key_session(
     session: AsyncSession, athlete: User
 ) -> None:
-    profile = (
-        await session.exec(
-            select(UserLifestyleProfile).where(UserLifestyleProfile.user_id == athlete.id)
-        )
-    ).one()
-    profile.available_days = ["MON", "WED", "FRI", "SAT"]
-    session.add(profile)
-    await session.commit()
-
+    plan = await _built_plan(session, athlete)
     today = local_today(athlete)
-    start = today + timedelta(days=(7 - today.weekday()))  # next Monday
-    end = today + timedelta(weeks=16)
-    tuesday = start + timedelta(days=1)
-    bad = plan_output(start, end, weekday_override=tuesday)  # quality session on a Tuesday
-    good = plan_output(start, end)
-    good.workouts[1].scheduled_date = start + timedelta(days=2)  # easy run moved to Wednesday
+    aged = await _age_window(session, plan, today)
 
-    llm = FakeLLM().queue(PlanGenerationOutput, bad, good)
-    plan, _, log = await generate_plan(session, llm, athlete, start_date=start)
-    assert len(llm.calls) == 2
-    assert "not an available day" in llm.calls[1].prompt
-    assert log.status == AgentRunStatus.SUCCESS
+    llm = FakeLLM().queue(RefinementOutput, refinement(propose_first_key=True))
+    confirmed, proposals, output = await refine_plan(session, llm, athlete)
+
+    assert {w.id for w in confirmed} == {w.id for w in aged}
+    assert all(w.detail_level == WorkoutDetail.CONFIRMED for w in confirmed)
+    tuesday = next(w for w in confirmed if w.workout_type == WorkoutType.THRESHOLD)
+    assert tuesday.structure[0]["target_pace"] is not None
+    assert len(proposals) == 1 and proposals[0].status == RevisionStatus.PENDING
+    key = await session.get(Workout, proposals[0].workout_id)
+    assert (
+        key is not None and key.is_key_session and key.scheduled_date > today + timedelta(days=14)
+    )
+    assert key.status == WorkoutStatus.PLANNED  # not applied until the athlete accepts
+    assert plan.last_refined_on == today
+
+    # Nothing provisional left in the window → no model call
+    again = FakeLLM()
+    assert await refine_plan(session, again, athlete) == ([], [], None)
+    assert again.calls == []
+
+
+def test_refinement_due_rules() -> None:
+    from app.agents.scheduler import refinement_due
+
+    sunday_evening = datetime(2026, 11, 15, 20, 30)  # a Sunday
+    assert refinement_due(None, sunday_evening)
+    assert refinement_due(date(2026, 11, 8), sunday_evening)
+    assert not refinement_due(date(2026, 11, 15), sunday_evening)  # already done today
+    assert not refinement_due(date(2026, 11, 12), datetime(2026, 11, 15, 18, 0))  # too early
+    assert refinement_due(date(2026, 11, 8), datetime(2026, 11, 16, 9, 0))  # Monday catch-up
+
+
+async def test_claim_refinement_is_exclusive(session: AsyncSession, athlete: User) -> None:
+    from app.agents.scheduler import claim_refinement
+
+    plan = await _built_plan(session, athlete)
+    tomorrow = local_today(athlete) + timedelta(days=1)
+    assert await claim_refinement(session, plan.id, tomorrow) is True
+    assert await claim_refinement(session, plan.id, tomorrow) is False
 
 
 # --- Post-activity pipeline ---------------------------------------------------------------
@@ -358,6 +475,14 @@ async def api(
     app.dependency_overrides[get_fit_storage] = lambda: storage
     app.dependency_overrides[get_llm] = lambda: llm
     app.dependency_overrides[get_pipeline_launcher] = lambda: _launch
+
+    async def _build_inline(user_id: uuid.UUID, plan_id: uuid.UUID) -> None:
+        user = await session.get(User, user_id)
+        plan = await session.get(TrainingPlan, plan_id)
+        assert user is not None and plan is not None
+        await build_plan(session, _queue_full_plan(llm, plan), user, plan)
+
+    app.dependency_overrides[get_plan_job_launcher] = lambda: _build_inline
     transport = httpx.ASGITransport(app=app)
     async with httpx.AsyncClient(transport=transport, base_url="http://test/api/v1") as c:
         yield c, llm, launched
@@ -578,3 +703,104 @@ async def test_anthropic_llm_other_type_errors_propagate() -> None:
         await llm.generate(
             system="s", prompt="p", output_model=CoachChatOutput, effort="low", max_tokens=100
         )
+
+
+# --- Plan endpoints -----------------------------------------------------------------------
+
+
+async def test_generate_endpoint_returns_202_then_plan_is_active(
+    api: tuple[httpx.AsyncClient, FakeLLM, list[tuple[uuid.UUID, uuid.UUID]]], athlete: User
+) -> None:
+    client, _, _ = api
+    started = await client.post("/plans/generate", headers=_h(athlete))
+    assert started.status_code == 202 and started.json()["status"] == "GENERATING"
+    plan = (await client.get(f"/plans/{started.json()['id']}", headers=_h(athlete))).json()
+    assert plan["status"] == "ACTIVE" and len(plan["blocks"]) == 2
+
+    keys = (await client.get("/workouts?key_only=true", headers=_h(athlete))).json()
+    assert keys and all(w["is_key_session"] for w in keys)
+    assert {date.fromisoformat(w["scheduled_date"]).weekday() for w in keys} == {6}
+    assert keys[-1]["detail_level"] == "PROVISIONAL"  # far ahead, zones only
+
+
+async def test_generate_endpoint_rejects_concurrent_generation(
+    api: tuple[httpx.AsyncClient, FakeLLM, list[tuple[uuid.UUID, uuid.UUID]]],
+    session: AsyncSession,
+    athlete: User,
+) -> None:
+    client, _, _ = api
+    await start_plan_generation(session, athlete)  # stays GENERATING
+    response = await client.post("/plans/generate", headers=_h(athlete))
+    assert response.status_code == 409
+
+
+async def test_proposals_accept_reject_and_history(
+    api: tuple[httpx.AsyncClient, FakeLLM, list[tuple[uuid.UUID, uuid.UUID]]],
+    session: AsyncSession,
+    athlete: User,
+) -> None:
+    from app.services.workouts import propose
+
+    client, llm, _ = api
+    plan = await _built_plan(session, athlete)
+    await _age_window(session, plan, local_today(athlete))
+
+    llm.queue(RefinementOutput, refinement(propose_first_key=True))
+    refined = (await client.post("/plans/active/refine", headers=_h(athlete))).json()
+    assert refined["confirmed"] and refined["notes"] == "Settimana confermata."
+
+    pending = (await client.get("/plans/active/proposals", headers=_h(athlete))).json()
+    assert len(pending) == 1
+    proposal = pending[0]
+    accepted = await client.post(f"/plans/proposals/{proposal['id']}/accept", headers=_h(athlete))
+    assert accepted.status_code == 200
+    moved = accepted.json()
+    assert moved["scheduled_date"] == proposal["after"]["scheduled_date"]
+    assert moved["status"] == "MODIFIED" and moved["title"] == "Lungo 32 km"
+    again = await client.post(f"/plans/proposals/{proposal['id']}/accept", headers=_h(athlete))
+    assert again.status_code == 409
+
+    hist = (await client.get(f"/workouts/{moved['id']}/history", headers=_h(athlete))).json()
+    assert [h["status"] for h in hist] == ["APPLIED"]
+    assert "cedimento" in hist[0]["reason"]
+
+    # A second proposal on the same session, rejected
+    workout = await session.get(Workout, uuid.UUID(moved["id"]))
+    assert workout is not None
+    from app.schemas.training import WorkoutDraft
+
+    rev = await propose(
+        session,
+        workout,
+        WorkoutDraft.model_validate(proposal["before"]),
+        reason="Torna alla data originale",
+        agent_run_id=None,
+    )
+    await session.commit()
+    rejected = await client.post(f"/plans/proposals/{rev.id}/reject", headers=_h(athlete))
+    assert (
+        rejected.status_code == 200 and rejected.json()["scheduled_date"] == moved["scheduled_date"]
+    )
+    assert (await client.get("/plans/active/proposals", headers=_h(athlete))).json() == []
+
+
+async def test_post_activity_adjustment_is_recorded_in_history(
+    session: AsyncSession, athlete: User, storage: LocalFitStorage
+) -> None:
+    workouts = await _active_plan_with_workouts(session, athlete)
+    activity = await _ingest_today(session, athlete, storage, final_cadence_drop=6)
+    llm = (
+        FakeLLM()
+        .queue(MechanicalLoadOutput, mechanical_output())
+        .queue(PlanAdjustmentOutput, adjust_all("REDUCE"))
+        .queue(NutritionRecoveryOutput, nutrition_output())
+    )
+    await run_post_activity_pipeline(session, llm, athlete, activity)  # type: ignore[arg-type]
+    from app.services.workouts import history
+
+    revs = await history(session, workouts[1].id)
+    assert len(revs) == 1
+    assert (
+        revs[0].source == RevisionSource.POST_ACTIVITY and revs[0].status == RevisionStatus.APPLIED
+    )
+    assert revs[0].before and revs[0].before["title"] == "Workout +1"

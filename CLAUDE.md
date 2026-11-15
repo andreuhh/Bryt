@@ -78,8 +78,9 @@ npm run build && npm run lint
 | `users` | `id` = UUID di **Supabase Auth** (`auth.users.id`), mai generato dal backend |
 | `user_lifestyle_profiles` | 1:1 con user (`UNIQUE user_id`). API key Intervals solo in `intervals_api_key_encrypted` |
 | `personal_bests` | una riga per PB (storico): la calibrazione pesa i PB **recenti** |
-| `training_plans` | `blocks` JSONB = `list[PlanBlock]` |
-| `workouts` | `PLANNED`/`COMPLETED`/`MODIFIED`; `structure` JSONB = `list[WorkoutStep]`; `original_snapshot` prima di una modifica agent |
+| `training_plans` | `GENERATING`→`ACTIVE` (o `FAILED` + `generation_error`); `blocks` JSONB = `list[PlanBlock]`; `last_refined_on` |
+| `workouts` | `PLANNED`/`COMPLETED`/`MODIFIED`; `detail_level` `CONFIRMED`/`PROVISIONAL`; `is_key_session`; `structure` JSONB = `list[WorkoutStep]`; `original_snapshot` = prima versione |
+| `workout_revisions` | cronologia (`APPLIED`) e proposte (`PENDING` → `APPLIED`/`REJECTED`/`SUPERSEDED`) con `before`/`after` = `WorkoutDraft` e `reason` |
 | `activities` | dedup `UNIQUE(user_id, source, external_id)` e `UNIQUE(user_id, fit_sha256)`; `context_tags` JSONB = `ContextTags` |
 | `activity_streams` | serie temporali 1:1 con activity, array allineati su `elapsed_s` |
 | `agent_execution_logs` | input/output JSON, `pipeline_run_id` per la cascata, feedback 👍/👎 |
@@ -137,8 +138,11 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
 | POST | `/api/v1/integrations/intervals/sync` | 3 ✅ |
 | POST | `/api/v1/integrations/intervals/webhook` (pubblico, autenticato dal `secret`) | 3 ✅ |
 | POST | `/api/v1/activities/upload-fit` (201 nuovo / 200 già presente) | 3 ✅ |
-| POST | `/api/v1/plans/generate` (archivia il piano attivo precedente) | 4 ✅ |
-| GET  | `/api/v1/plans/active`, `/api/v1/workouts?from=&to=` (calendario) | 4 ✅ |
+| POST | `/api/v1/plans/generate` → **202** `GENERATING`, job in background; polling `GET /plans/{id}` | 4 ✅ |
+| GET  | `/api/v1/plans/active`, `/api/v1/workouts?from=&to=&key_only=` (calendario / sessioni chiave) | 4 ✅ |
+| POST | `/api/v1/plans/active/refine` (aggiornamento settimanale manuale) | 4 ✅ |
+| GET  | `/api/v1/plans/active/proposals`; POST `/plans/proposals/{id}/accept\|reject` | 4 ✅ |
+| GET  | `/api/v1/workouts/{id}/history` (perché una sessione è cambiata) | 4 ✅ |
 | POST | `/api/v1/plans/adjust` (conferma la proposta della chat) | 4 ✅ |
 | POST | `/api/v1/chat` (stateless: il client invia la conversazione) | 4 ✅ |
 | GET  | `/api/v1/activities`, `/{id}`, `/{id}/streams`, `/{id}/report` | 4 ✅ |
@@ -162,7 +166,22 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
   background (`get_pipeline_launcher`, disattivabile con `AGENTS_ENABLED=false`) dopo upload,
   sync Intervals, webhook e aggiornamento dei tag.
 - Effort: piano `high`; analisi, adattamento, nutrizione `medium`; chat `low`.
-- Piano: blocchi su tutto l'orizzonte, workout giornalieri solo per `PLAN_DETAIL_WEEKS` (3).
+- **Piano a orizzonte completo** (`training_periodization.py`):
+  1. generazione in background: fase 1 *scheletro* (blocchi contigui fino al giorno gara, volume
+     target per settimana), fase 2 *un blocco alla volta* con **ogni giorno** (REST espliciti),
+     continuità passata dall'ultima settimana del blocco precedente. In caso di errore il piano
+     va in `FAILED`, i suoi workout sono rimossi e il piano attivo precedente resta valido;
+  2. `detail_level` deciso dal **codice** in base alla data (`services/workouts.py`,
+     `CONFIRM_DAYS = 14`): oltre la finestra i workout sono `PROVISIONAL` e passi/FC esatti
+     vengono rimossi (restano zone, distanza/durata, `is_key_session`);
+  3. **aggiornamento settimanale** (domenica ≥ 20:00 ora locale dell'atleta, recupero se
+     saltato ≥ 7 giorni): conferma i provvisori dei prossimi 14 giorni con i dati attuali;
+     sulle sessioni chiave più lontane solo **proposte** `PENDING`, applicate se l'atleta accetta;
+  4. ogni modifica materiale (post-attività, chat, refinement, proposta accettata) → riga
+     `workout_revisions` `APPLIED` con motivazione.
+- **Scheduler** (`agents/scheduler.py`): task asyncio nel lifespan dell'app, tick ogni
+  `SCHEDULER_INTERVAL_S`; ogni piano viene *claimato* con UPDATE condizionale atomico su
+  `last_refined_on` (sicuro con più istanze). `SCHEDULER_ENABLED=false` nei test.
 - Test: `tests/agent_fakes.FakeLLM` (nessuna chiamata di rete nei test).
 
 ### Servizi deterministici di contesto

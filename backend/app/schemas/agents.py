@@ -55,15 +55,42 @@ class Readiness(StrEnum):
 # --- TrainingPeriodizationAgent ---------------------------------------------------------
 
 
-class PlanGenerationOutput(StrictModel):
+class PlanSkeletonOutput(StrictModel):
+    """Phase 1 of plan generation: periodization only (blocks and weeks, no workouts)."""
+
     plan_name: str = Field(max_length=160)
     methodology: Methodology
     goal_summary: str
     start_date: date
     end_date: date
     blocks: list[PlanBlock] = Field(min_length=1)
-    workouts: list[WorkoutDraft] = Field(min_length=1)
     rationale: str
+
+
+class BlockWorkoutsOutput(StrictModel):
+    """Phase 2: every day of ONE block (REST days explicit)."""
+
+    workouts: list[WorkoutDraft] = Field(min_length=1)
+
+
+class ConfirmedWorkout(StrictModel):
+    workout_id: uuid.UUID
+    workout: WorkoutDraft = Field(description="Full detail: structure with calibrated pace/HR")
+
+
+class KeySessionProposal(StrictModel):
+    workout_id: uuid.UUID
+    proposed: WorkoutDraft
+    reason: str
+
+
+class RefinementOutput(StrictModel):
+    """Weekly refinement: provisional → confirmed for the next 2 weeks, plus proposals
+    (never applied automatically) for key sessions further ahead."""
+
+    confirmed: list[ConfirmedWorkout]
+    key_session_proposals: list[KeySessionProposal] = Field(default_factory=list)
+    notes: str = Field(description="Short summary for the athlete, in Italian")
 
 
 class WorkoutAdjustmentAction(StrEnum):

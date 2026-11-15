@@ -13,9 +13,12 @@ from app.models.enums import (
     BlockPhase,
     Methodology,
     PlanStatus,
+    RevisionSource,
+    RevisionStatus,
     SessionSlot,
     StepKind,
     WeekLoadType,
+    WorkoutDetail,
     WorkoutStatus,
     WorkoutType,
 )
@@ -94,6 +97,10 @@ class WorkoutDraft(StrictModel):
     target_duration_s: int | None = Field(default=None, gt=0)
     target_distance_m: int | None = Field(default=None, gt=0)
     structure: list[WorkoutStep] = Field(default_factory=list)
+    is_key_session: bool = Field(
+        default=False,
+        description="Long runs, race-pace sessions, tune-up races, decisive quality sessions",
+    )
 
 
 # --- API read models --------------------------------------------------------------------
@@ -106,6 +113,8 @@ class WorkoutRead(ORMModel):
     session_slot: SessionSlot
     workout_type: WorkoutType
     status: WorkoutStatus
+    detail_level: WorkoutDetail
+    is_key_session: bool
     title: str
     description: str | None
     target_duration_s: int | None
@@ -126,4 +135,18 @@ class TrainingPlanRead(ORMModel):
     goal_summary: str | None
     blocks: list[PlanBlock]
     rationale: str | None
+    last_refined_on: date | None
+    generation_error: str | None
     created_at: datetime | None
+
+
+class WorkoutRevisionRead(ORMModel):
+    id: uuid.UUID
+    workout_id: uuid.UUID
+    status: RevisionStatus
+    source: RevisionSource
+    before: WorkoutDraft | None
+    after: WorkoutDraft
+    reason: str
+    created_at: datetime | None
+    resolved_at: datetime | None

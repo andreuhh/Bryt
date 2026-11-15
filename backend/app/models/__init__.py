@@ -5,7 +5,7 @@ Importing this package registers every table on SQLModel.metadata (used by Alemb
 
 from app.models.activity import Activity, ActivityStream
 from app.models.agent_log import AgentExecutionLog
-from app.models.training import TrainingPlan, Workout
+from app.models.training import TrainingPlan, Workout, WorkoutRevision
 from app.models.user import PersonalBest, User, UserLifestyleProfile
 
 __all__ = [
@@ -17,4 +17,5 @@ __all__ = [
     "User",
     "UserLifestyleProfile",
     "Workout",
+    "WorkoutRevision",
 ]

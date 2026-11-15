@@ -8,17 +8,17 @@ from pydantic import Field
 
 from app.schemas.agents import PlanAdjustmentRequest
 from app.schemas.common import StrictModel
-from app.schemas.training import TrainingPlanRead, WorkoutRead
+from app.schemas.training import WorkoutRead, WorkoutRevisionRead
 
 
 class PlanGenerateRequest(StrictModel):
     start_date: date | None = Field(default=None, description="Default: tomorrow")
 
 
-class PlanGenerateResult(StrictModel):
-    plan: TrainingPlanRead
-    workouts: list[WorkoutRead]
-    agent_run_id: uuid.UUID
+class RefinementResult(StrictModel):
+    confirmed: list[WorkoutRead]
+    proposals: list[WorkoutRevisionRead]
+    notes: str | None
 
 
 class PlanAdjustApply(StrictModel):

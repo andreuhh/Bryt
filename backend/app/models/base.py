@@ -15,7 +15,13 @@ from sqlalchemy.dialects.postgresql import JSONB
 from sqlmodel import Field, SQLModel
 
 
-def enum_column(enum_cls: type[StrEnum], *, nullable: bool = False, index: bool = False) -> Any:
+def enum_column(
+    enum_cls: type[StrEnum],
+    *,
+    nullable: bool = False,
+    index: bool = False,
+    server_default: StrEnum | None = None,
+) -> Any:
     """VARCHAR-backed enum column (no native PG type → painless migrations)."""
     return Column(
         SAEnum(
@@ -27,6 +33,7 @@ def enum_column(enum_cls: type[StrEnum], *, nullable: bool = False, index: bool 
         ),
         nullable=nullable,
         index=index,
+        server_default=server_default.value if server_default else None,
     )
 
 

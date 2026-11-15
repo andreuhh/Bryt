@@ -6,10 +6,13 @@ from pydantic import BaseModel, ValidationError
 from app.models import UserLifestyleProfile
 from app.models.enums import AthleteBackground, TrainingSlot, WorkType
 from app.schemas.agents import (
+    BlockWorkoutsOutput,
+    CoachChatOutput,
     MechanicalLoadOutput,
     NutritionRecoveryOutput,
     PlanAdjustmentOutput,
-    PlanGenerationOutput,
+    PlanSkeletonOutput,
+    RefinementOutput,
     WorkoutAdjustment,
 )
 from app.schemas.common import PaceRange
@@ -118,7 +121,15 @@ def test_caffeine_cutoff_format() -> None:
 
 @pytest.mark.parametrize(
     "schema",
-    [MechanicalLoadOutput, NutritionRecoveryOutput, PlanGenerationOutput, PlanAdjustmentOutput],
+    [
+        MechanicalLoadOutput,
+        NutritionRecoveryOutput,
+        PlanSkeletonOutput,
+        BlockWorkoutsOutput,
+        RefinementOutput,
+        PlanAdjustmentOutput,
+        CoachChatOutput,
+    ],
 )
 def test_agent_outputs_export_json_schema(schema: type[BaseModel]) -> None:
     js = schema.model_json_schema()

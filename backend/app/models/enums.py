@@ -50,8 +50,10 @@ class Methodology(StrEnum):
 
 class PlanStatus(StrEnum):
     DRAFT = "DRAFT"
+    GENERATING = "GENERATING"  # background generation in progress
     ACTIVE = "ACTIVE"
     ARCHIVED = "ARCHIVED"
+    FAILED = "FAILED"
 
 
 class BlockPhase(StrEnum):
@@ -89,6 +91,24 @@ class WorkoutStatus(StrEnum):
     MODIFIED = "MODIFIED"
 
 
+class WorkoutDetail(StrEnum):
+    CONFIRMED = "CONFIRMED"  # next ~2 weeks: full structure, calibrated pace/HR
+    PROVISIONAL = "PROVISIONAL"  # further ahead: type, volume and zones only
+
+
+class RevisionStatus(StrEnum):
+    APPLIED = "APPLIED"  # part of the workout history
+    PENDING = "PENDING"  # proposal waiting for the athlete
+    REJECTED = "REJECTED"
+    SUPERSEDED = "SUPERSEDED"  # replaced by a newer proposal or no longer applicable
+
+
+class RevisionSource(StrEnum):
+    WEEKLY_REFINEMENT = "WEEKLY_REFINEMENT"
+    POST_ACTIVITY = "POST_ACTIVITY"
+    COACH_CHAT = "COACH_CHAT"
+
+
 class SessionSlot(StrEnum):
     SINGLE = "SINGLE"
     AM = "AM"  # double threshold: sessione mattina
@@ -119,6 +139,7 @@ class AgentTrigger(StrEnum):
     POST_ACTIVITY = "POST_ACTIVITY"
     ADJUSTMENT = "ADJUSTMENT"
     CHAT = "CHAT"
+    WEEKLY_REFINEMENT = "WEEKLY_REFINEMENT"
 
 
 class AgentRunStatus(StrEnum):

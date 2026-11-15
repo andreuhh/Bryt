@@ -30,7 +30,9 @@ class Settings(BaseSettings):
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-opus-5-5"
     agents_enabled: bool = True  # run the post-activity pipeline automatically after ingestion
-    plan_detail_weeks: int = 3  # weeks with day-by-day workouts; blocks cover the whole horizon
+    # Weekly refinement scheduler (Sunday evening, athlete's local time)
+    scheduler_enabled: bool = True
+    scheduler_interval_s: int = 1800
 
     # Intervals.icu
     intervals_base_url: str = "https://intervals.icu/api/v1"

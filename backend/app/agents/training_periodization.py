@@ -1,15 +1,25 @@
-"""TrainingPeriodizationAgent: plan generation (onboarding) and adaptive re-modulation."""
+"""TrainingPeriodizationAgent.
+
+- Plan generation (background job): phase 1 skeleton (blocks/weeks to race day), phase 2
+  every day of each block. Workouts within CONFIRM_DAYS are CONFIRMED (full pace/HR detail),
+  the rest PROVISIONAL (zones only) — decided by code from the date, not by the model.
+- Weekly refinement: provisional → confirmed for the next 2 weeks; far-ahead key sessions
+  only get PENDING proposals the athlete accepts or rejects.
+- Adaptive re-modulation (post-activity / chat): next 1-4 days, recorded as revisions.
+"""
 
 import uuid
 from collections import Counter
+from collections.abc import Callable
 from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
 
-from sqlmodel import select
+from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.agents import prompts
 from app.agents.context import (
+    MissingProfileError,
     active_plan,
     athlete_context,
     dump_workout,
@@ -18,132 +28,48 @@ from app.agents.context import (
 )
 from app.agents.llm import LLMClient
 from app.agents.runner import run_agent
-from app.core.config import get_settings
-from app.models import AgentExecutionLog, TrainingPlan, User, Workout
+from app.models import AgentExecutionLog, TrainingPlan, User, Workout, WorkoutRevision
 from app.models.enums import (
     AgentName,
+    AgentRunStatus,
     AgentTrigger,
     PlanStatus,
+    RevisionSource,
+    WorkoutDetail,
     WorkoutStatus,
     WorkoutType,
 )
 from app.schemas.agents import (
+    BlockWorkoutsOutput,
     PlanAdjustmentOutput,
     PlanAdjustmentRequest,
-    PlanGenerationOutput,
-    WorkoutAdjustment,
+    PlanSkeletonOutput,
+    RefinementOutput,
     WorkoutAdjustmentAction,
 )
-from app.schemas.training import AthleteCalibration, WorkoutDraft
+from app.schemas.training import AthleteCalibration, PlanBlock, WorkoutDraft
 from app.services.history import training_baseline
+from app.services.profile import get_profile
+from app.services.workouts import (
+    apply_draft,
+    confirmed_until,
+    detail_for,
+    new_workout,
+    propose,
+    snapshot,
+)
 
 WEEKDAYS = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
 DEFAULT_HORIZON_WEEKS = 12
+KEY_SESSION_LOOKAHEAD_DAYS = 42  # far-ahead key sessions shown to the weekly refinement
+RECENT_ANALYSES_DAYS = 14
 
 
 class NoActivePlanError(Exception):
     pass
 
 
-# --- Plan generation ----------------------------------------------------------------------
-
-
-async def generate_plan(
-    session: AsyncSession,
-    llm: LLMClient,
-    user: User,
-    *,
-    start_date: date | None = None,
-    run_id: uuid.UUID | None = None,
-) -> tuple[TrainingPlan, list[Workout], AgentExecutionLog]:
-    today = local_today(user)
-    start = start_date or today + timedelta(days=1)
-    ctx, calibration = await athlete_context(session, user, today)
-    race_date = ctx["athlete"].get("target_race_date")
-    end = (
-        date.fromisoformat(race_date)
-        if race_date and date.fromisoformat(race_date) > start
-        else start + timedelta(weeks=DEFAULT_HORIZON_WEEKS, days=-1)
-    )
-    detail_end = min(end, start + timedelta(weeks=get_settings().plan_detail_weeks, days=-1))
-    baseline = await training_baseline(session, user.id, datetime.combine(today, time.min, UTC))
-    ctx["baseline_28d"] = baseline.model_dump(mode="json")
-
-    task = (
-        f"Generate the training plan. start_date={start.isoformat()}, "
-        f"end_date={end.isoformat()} (race day or end of block). Blocks and weeks must cover "
-        f"the whole range. Day-by-day workouts ONLY from {start.isoformat()} to "
-        f"{detail_end.isoformat()} inclusive (include REST days explicitly)."
-    )
-    available = set(ctx["athlete"]["available_days"])
-    output, log = await run_agent(
-        session,
-        llm,
-        user_id=user.id,
-        agent=AgentName.TRAINING_PERIODIZATION,
-        trigger=AgentTrigger.ONBOARDING,
-        run_id=run_id or uuid.uuid4(),
-        system=prompts.TRAINING_PERIODIZATION,
-        task=task,
-        context=ctx,
-        output_model=PlanGenerationOutput,
-        effort="high",
-        max_tokens=64000,
-        validate=lambda out: _plan_violations(out, start, end, detail_end, available, calibration),
-    )
-
-    for old in (
-        await session.exec(
-            select(TrainingPlan).where(
-                TrainingPlan.user_id == user.id, TrainingPlan.status == PlanStatus.ACTIVE
-            )
-        )
-    ).all():
-        old.status = PlanStatus.ARCHIVED
-        session.add(old)
-
-    plan = TrainingPlan(
-        user_id=user.id,
-        name=output.plan_name,
-        status=PlanStatus.ACTIVE,
-        methodology=output.methodology,
-        start_date=output.start_date,
-        end_date=output.end_date,
-        goal_summary=output.goal_summary[:500],
-        blocks=[b.model_dump(mode="json") for b in output.blocks],
-        rationale=output.rationale,
-    )
-    session.add(plan)
-    await session.flush()
-    workouts = [_workout_from_draft(user.id, plan.id, d) for d in output.workouts]
-    session.add_all(workouts)
-    log.plan_id = plan.id
-    session.add(log)
-    await session.commit()
-    return plan, workouts, log
-
-
-def _plan_violations(
-    out: PlanGenerationOutput,
-    start: date,
-    end: date,
-    detail_end: date,
-    available: set[str],
-    calibration: AthleteCalibration,
-) -> list[str]:
-    v: list[str] = []
-    if out.start_date != start or out.end_date != end:
-        v.append(f"plan must span exactly {start} → {end}")
-    for b in out.blocks:
-        if b.start_date < start or b.end_date > end:
-            v.append(f"block '{b.name}' is outside {start} → {end}")
-    per_day = Counter(w.scheduled_date for w in out.workouts if w.workout_type != WorkoutType.REST)
-    for w in out.workouts:
-        if not start <= w.scheduled_date <= detail_end:
-            v.append(f"workout '{w.title}' on {w.scheduled_date} is outside {start} → {detail_end}")
-        v.extend(_draft_violations(w, available, calibration))
-    v.extend(f"{day}: more than 2 sessions" for day, n in per_day.items() if n > 2)
-    return v
+# --- Shared validation --------------------------------------------------------------------
 
 
 def _draft_violations(
@@ -160,19 +86,334 @@ def _draft_violations(
     return v
 
 
-def _workout_from_draft(user_id: uuid.UUID, plan_id: uuid.UUID, d: WorkoutDraft) -> Workout:
-    return Workout(
-        user_id=user_id,
-        plan_id=plan_id,
-        scheduled_date=d.scheduled_date,
-        session_slot=d.session_slot,
-        workout_type=d.workout_type,
-        title=d.title,
-        description=d.description,
-        target_duration_s=d.target_duration_s,
-        target_distance_m=d.target_distance_m,
-        structure=[s.model_dump(mode="json") for s in d.structure],
+def _days(start: date, end: date) -> list[date]:
+    return [start + timedelta(days=i) for i in range((end - start).days + 1)]
+
+
+def _midnight(day: date) -> datetime:
+    return datetime.combine(day, time.min, tzinfo=UTC)
+
+
+# --- Plan generation ----------------------------------------------------------------------
+
+
+async def start_plan_generation(
+    session: AsyncSession, user: User, *, start_date: date | None = None
+) -> TrainingPlan:
+    """Fast, synchronous part: validates prerequisites and creates the GENERATING plan."""
+    profile = await get_profile(session, user)
+    if profile is None:
+        raise MissingProfileError("Onboarding not completed")
+    today = local_today(user)
+    start = start_date or today + timedelta(days=1)
+    race = profile.target_race_date
+    end = race if race and race > start else start + timedelta(weeks=DEFAULT_HORIZON_WEEKS, days=-1)
+    plan = TrainingPlan(
+        user_id=user.id,
+        name="Piano in generazione",
+        status=PlanStatus.GENERATING,
+        methodology=profile.methodology,
+        start_date=start,
+        end_date=end,
     )
+    session.add(plan)
+    await session.commit()
+    await session.refresh(plan)
+    return plan
+
+
+async def build_plan(
+    session: AsyncSession, llm: LLMClient, user: User, plan: TrainingPlan
+) -> TrainingPlan:
+    """Slow part (background): skeleton + one call per block. Never leaves a half plan:
+    on failure the plan is FAILED, its workouts removed and the previous plan kept active."""
+    run_id, plan_id = uuid.uuid4(), plan.id
+    try:
+        await _build(session, llm, user, plan, run_id)
+    except Exception as exc:
+        # rollback expires loaded objects: reload by id instead of touching `plan`
+        await session.rollback()
+        for w in (await session.exec(select(Workout).where(Workout.plan_id == plan_id))).all():
+            await session.delete(w)
+        failed = await session.get(TrainingPlan, plan_id)
+        assert failed is not None
+        failed.status = PlanStatus.FAILED
+        failed.generation_error = f"{type(exc).__name__}: {exc}"[:1000]
+        session.add(failed)
+        await session.commit()
+        raise
+    return plan
+
+
+async def _build(
+    session: AsyncSession, llm: LLMClient, user: User, plan: TrainingPlan, run_id: uuid.UUID
+) -> None:
+    today = local_today(user)
+    start, end = plan.start_date, plan.end_date
+    ctx, calibration = await athlete_context(session, user, today)
+    ctx["baseline_28d"] = (await training_baseline(session, user.id, _midnight(today))).model_dump(
+        mode="json"
+    )
+    available = set(ctx["athlete"]["available_days"])
+
+    skeleton, _ = await run_agent(
+        session,
+        llm,
+        user_id=user.id,
+        agent=AgentName.TRAINING_PERIODIZATION,
+        trigger=AgentTrigger.ONBOARDING,
+        run_id=run_id,
+        system=prompts.TRAINING_PERIODIZATION,
+        task=(
+            f"Phase 1 — skeleton. start_date={start}, end_date={end} (race day or end of "
+            "block). Blocks must be contiguous and cover the whole range; every week needs a "
+            "target_volume_km."
+        ),
+        context=ctx,
+        output_model=PlanSkeletonOutput,
+        effort="high",
+        max_tokens=32000,
+        validate=lambda out: _skeleton_violations(out, start, end),
+        plan_id=plan.id,
+    )
+    plan.name = skeleton.plan_name
+    plan.methodology = skeleton.methodology
+    plan.goal_summary = skeleton.goal_summary[:500]
+    plan.blocks = [b.model_dump(mode="json") for b in skeleton.blocks]
+    plan.rationale = skeleton.rationale
+    session.add(plan)
+
+    confirm_end = confirmed_until(today)
+    previous: list[dict[str, Any]] = []
+    for block in sorted(skeleton.blocks, key=lambda b: b.start_date):
+        block_ctx = ctx | {
+            "skeleton": skeleton.model_dump(mode="json"),
+            "current_block": block.model_dump(mode="json"),
+            "previous_block_last_week": previous,
+        }
+        out, _ = await run_agent(
+            session,
+            llm,
+            user_id=user.id,
+            agent=AgentName.TRAINING_PERIODIZATION,
+            trigger=AgentTrigger.ONBOARDING,
+            run_id=run_id,
+            system=prompts.TRAINING_PERIODIZATION,
+            task=(
+                f"Phase 2 — workouts of block '{block.name}': every day from "
+                f"{block.start_date} to {block.end_date}. Full detail (pace/HR) only up to "
+                f"{confirm_end}; later workouts provisional (zones only)."
+            ),
+            context=block_ctx,
+            output_model=BlockWorkoutsOutput,
+            effort="medium",
+            max_tokens=64000,
+            validate=_block_validator(block, available, calibration),
+            plan_id=plan.id,
+        )
+        session.add_all(new_workout(user.id, plan.id, d, today) for d in out.workouts)
+        last_week = block.end_date - timedelta(days=6)
+        previous = [
+            d.model_dump(mode="json") for d in out.workouts if d.scheduled_date >= last_week
+        ]
+
+    for old in (
+        await session.exec(
+            select(TrainingPlan).where(
+                TrainingPlan.user_id == user.id,
+                TrainingPlan.status == PlanStatus.ACTIVE,
+                TrainingPlan.id != plan.id,
+            )
+        )
+    ).all():
+        old.status = PlanStatus.ARCHIVED
+        session.add(old)
+    plan.status = PlanStatus.ACTIVE
+    plan.last_refined_on = today  # first two weeks are already confirmed
+    plan.generation_error = None
+    session.add(plan)
+    await session.commit()
+
+
+def _skeleton_violations(out: PlanSkeletonOutput, start: date, end: date) -> list[str]:
+    v: list[str] = []
+    if out.start_date != start or out.end_date != end:
+        v.append(f"plan must span exactly {start} → {end}")
+    blocks = sorted(out.blocks, key=lambda b: b.start_date)
+    if blocks[0].start_date != start or blocks[-1].end_date != end:
+        v.append(f"blocks must start on {start} and end on {end}")
+    for prev, nxt in zip(blocks, blocks[1:], strict=False):
+        if nxt.start_date != prev.end_date + timedelta(days=1):
+            v.append(f"gap or overlap between '{prev.name}' and '{nxt.name}'")
+    v.extend(
+        f"block '{b.name}' week {w.week_index}: missing target_volume_km"
+        for b in blocks
+        for w in b.weeks
+        if w.target_volume_km is None
+    )
+    return v
+
+
+def _block_validator(
+    block: PlanBlock, available: set[str], calibration: AthleteCalibration
+) -> Callable[[BlockWorkoutsOutput], list[str]]:
+    return lambda out: _block_violations(out, block, available, calibration)
+
+
+def _block_violations(
+    out: BlockWorkoutsOutput,
+    block: PlanBlock,
+    available: set[str],
+    calibration: AthleteCalibration,
+) -> list[str]:
+    v: list[str] = []
+    dates = [w.scheduled_date for w in out.workouts]
+    outside = sorted({d for d in dates if not block.start_date <= d <= block.end_date})
+    if outside:
+        v.append(f"dates outside {block.start_date} → {block.end_date}: {outside}")
+    missing = [d for d in _days(block.start_date, block.end_date) if d not in set(dates)]
+    if missing:
+        v.append(f"missing days (add a workout or an explicit REST): {missing}")
+    sessions = Counter(w.scheduled_date for w in out.workouts if w.workout_type != WorkoutType.REST)
+    v.extend(f"{d}: more than 2 sessions" for d, n in sessions.items() if n > 2)
+    for w in out.workouts:
+        v.extend(_draft_violations(w, available, calibration))
+    return v
+
+
+# --- Weekly refinement --------------------------------------------------------------------
+
+
+async def refine_plan(
+    session: AsyncSession, llm: LLMClient, user: User
+) -> tuple[list[Workout], list[WorkoutRevision], RefinementOutput | None]:
+    """Confirms the next 2 weeks. No LLM call when nothing is provisional in the window."""
+    plan = await active_plan(session, user.id)
+    if plan is None:
+        raise NoActivePlanError("No active plan")
+    today = local_today(user)
+    window_start, window_end = today + timedelta(days=1), confirmed_until(today)
+    in_window = await workouts_between(
+        session, plan.id, window_start, window_end, statuses=(WorkoutStatus.PLANNED,)
+    )
+    to_confirm = [w for w in in_window if w.detail_level == WorkoutDetail.PROVISIONAL]
+    if not to_confirm:
+        plan.last_refined_on = today
+        session.add(plan)
+        await session.commit()
+        return [], [], None
+
+    upcoming_keys = [
+        w
+        for w in await workouts_between(
+            session,
+            plan.id,
+            window_end + timedelta(days=1),
+            window_end + timedelta(days=KEY_SESSION_LOOKAHEAD_DAYS),
+        )
+        if w.is_key_session
+    ]
+    ctx, calibration = await athlete_context(session, user, today)
+    ctx |= {
+        "baseline_28d": (
+            await training_baseline(session, user.id, _midnight(today + timedelta(days=1)))
+        ).model_dump(mode="json"),
+        "recent_analyses": await _recent_analyses(session, user.id, today),
+        "plan_blocks": plan.blocks,
+        "already_confirmed": [dump_workout(w) for w in in_window if w not in to_confirm],
+        "workouts_to_confirm": [dump_workout(w) for w in to_confirm],
+        "upcoming_key_sessions": [dump_workout(w) for w in upcoming_keys],
+    }
+    available = set(ctx["athlete"]["available_days"])
+    confirm_ids = {w.id for w in to_confirm}
+    key_ids = {w.id for w in upcoming_keys}
+
+    def validate(out: RefinementOutput) -> list[str]:
+        v: list[str] = []
+        ids = Counter(c.workout_id for c in out.confirmed)
+        if set(ids) != confirm_ids:
+            v.append(f"confirm exactly these workouts: {sorted(map(str, confirm_ids))}")
+        v.extend(f"workout {i} confirmed {n} times" for i, n in ids.items() if n > 1)
+        for c in out.confirmed:
+            if not window_start <= c.workout.scheduled_date <= window_end:
+                v.append(f"{c.workout_id}: keep it within {window_start} → {window_end}")
+            v.extend(_draft_violations(c.workout, available, calibration))
+        for p in out.key_session_proposals:
+            if p.workout_id not in key_ids:
+                v.append(f"proposal for {p.workout_id}: only upcoming_key_sessions can be proposed")
+            if not window_end < p.proposed.scheduled_date <= plan.end_date:
+                v.append(f"proposal for {p.workout_id}: date must stay after {window_end}")
+            v.extend(_draft_violations(p.proposed, available, calibration))
+        return v
+
+    output, log = await run_agent(
+        session,
+        llm,
+        user_id=user.id,
+        agent=AgentName.TRAINING_PERIODIZATION,
+        trigger=AgentTrigger.WEEKLY_REFINEMENT,
+        run_id=uuid.uuid4(),
+        system=prompts.TRAINING_PERIODIZATION,
+        task=(
+            f"Weekly refinement on {today}: confirm every workout in workouts_to_confirm "
+            f"({window_start} → {window_end}) with full detail. Propose changes to "
+            "upcoming_key_sessions only if clearly needed."
+        ),
+        context=ctx,
+        output_model=RefinementOutput,
+        effort="high",
+        max_tokens=32000,
+        validate=validate,
+        plan_id=plan.id,
+    )
+
+    by_id = {w.id: w for w in to_confirm} | {w.id: w for w in upcoming_keys}
+    for c in output.confirmed:
+        apply_draft(
+            session,
+            by_id[c.workout_id],
+            c.workout,
+            reason=output.notes,
+            source=RevisionSource.WEEKLY_REFINEMENT,
+            agent_run_id=log.id,
+            mark_modified=False,
+            detail=WorkoutDetail.CONFIRMED,
+        )
+    proposals = [
+        await propose(
+            session, by_id[p.workout_id], p.proposed, reason=p.reason, agent_run_id=log.id
+        )
+        for p in output.key_session_proposals
+    ]
+    plan.last_refined_on = today
+    session.add(plan)
+    await session.commit()
+    return [by_id[c.workout_id] for c in output.confirmed], proposals, output
+
+
+async def _recent_analyses(
+    session: AsyncSession, user_id: uuid.UUID, today: date
+) -> list[dict[str, Any]]:
+    stmt = (
+        select(AgentExecutionLog)
+        .where(
+            AgentExecutionLog.user_id == user_id,
+            AgentExecutionLog.agent_name == AgentName.MECHANICAL_LOAD,
+            AgentExecutionLog.status == AgentRunStatus.SUCCESS,
+            col(AgentExecutionLog.created_at)
+            >= _midnight(today - timedelta(days=RECENT_ANALYSES_DAYS)),
+        )
+        .order_by(col(AgentExecutionLog.created_at))
+    )
+    return [
+        {
+            "activity_id": str(log.activity_id),
+            "summary": (log.output or {}).get("summary"),
+            "alerts": (log.output or {}).get("alerts", []),
+            "plan_adjustment_needed": (log.output or {}).get("plan_adjustment_needed"),
+        }
+        for log in (await session.exec(stmt)).all()
+    ]
 
 
 # --- Adaptive re-modulation ---------------------------------------------------------------
@@ -238,50 +479,40 @@ async def adjust_plan(
         plan_id=plan.id,
     )
 
-    modified = [
-        _apply(by_id[a.workout_id], a)
-        for a in output.adjustments
-        if a.action != WorkoutAdjustmentAction.KEEP
-    ]
-    session.add_all(modified)
+    source = (
+        RevisionSource.COACH_CHAT if trigger == AgentTrigger.CHAT else RevisionSource.POST_ACTIVITY
+    )
+    modified: list[Workout] = []
+    for adj in output.adjustments:
+        if adj.action == WorkoutAdjustmentAction.KEEP:
+            continue
+        workout = by_id[adj.workout_id]
+        draft = adj.new_workout or _rest_draft(workout)
+        apply_draft(
+            session,
+            workout,
+            draft,
+            reason=adj.reason,
+            source=source,
+            agent_run_id=log.id,
+            mark_modified=True,
+            detail=detail_for(draft.scheduled_date, today),
+        )
+        modified.append(workout)
     await session.commit()
     return modified, output, log
 
 
-def _apply(workout: Workout, adj: WorkoutAdjustment) -> Workout:
-    if workout.original_snapshot is None:  # keep the very first version across adjustments
-        workout.original_snapshot = _snapshot(workout)
-    draft = adj.new_workout
-    if adj.action == WorkoutAdjustmentAction.REST and draft is None:
-        workout.workout_type = WorkoutType.REST
-        workout.title = "Riposo"
-        workout.description = None
-        workout.target_duration_s = workout.target_distance_m = None
-        workout.structure = []
-    elif draft is not None:
-        workout.scheduled_date = draft.scheduled_date
-        workout.session_slot = draft.session_slot
-        workout.workout_type = draft.workout_type
-        workout.title = draft.title
-        workout.description = draft.description
-        workout.target_duration_s = draft.target_duration_s
-        workout.target_distance_m = draft.target_distance_m
-        workout.structure = [s.model_dump(mode="json") for s in draft.structure]
-    workout.status = WorkoutStatus.MODIFIED
-    workout.modification_reason = adj.reason
-    return workout
-
-
-def _snapshot(workout: Workout) -> dict[str, Any]:
+def _rest_draft(workout: Workout) -> WorkoutDraft:
     return WorkoutDraft.model_validate(
-        {
-            "scheduled_date": workout.scheduled_date,
-            "session_slot": workout.session_slot,
-            "workout_type": workout.workout_type,
-            "title": workout.title,
-            "description": workout.description,
-            "target_duration_s": workout.target_duration_s,
-            "target_distance_m": workout.target_distance_m,
-            "structure": workout.structure,
+        snapshot(workout)
+        | {
+            "workout_type": WorkoutType.REST,
+            "title": "Riposo",
+            "description": None,
+            "target_duration_s": None,
+            "target_distance_m": None,
+            "structure": [],
+            "is_key_session": False,
         }
-    ).model_dump(mode="json")
+    )
