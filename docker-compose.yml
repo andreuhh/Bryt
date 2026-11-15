@@ -1,0 +1,14 @@
+services:
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: bryt
+      POSTGRES_PASSWORD: bryt
+      POSTGRES_DB: bryt
+    ports:
+      - "5432:5432"
+    volumes:
+      - bryt_pg:/var/lib/postgresql/data
+
+volumes:
+  bryt_pg:

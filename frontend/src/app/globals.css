@@ -1,0 +1,109 @@
+@import "tailwindcss";
+@config "../../tailwind.config.ts";
+
+/* ==========================================================================
+   BRYT // Design Tokens — SINGLE SOURCE OF TRUTH
+   Every color, border and radius in the app resolves to these variables.
+   tailwind.config.ts maps them to utilities (bg-canvas, text-accent-pace, …).
+   Change a value here → the whole UI follows. Never hardcode hex in components.
+   ========================================================================== */
+
+:root {
+  color-scheme: dark;
+
+  /* Surfaces (dark is the default theme) */
+  --bryt-canvas: #090a0c;
+  --bryt-surface: #121418;
+  --bryt-elevated: #1c1f26;
+  --bryt-elevated-hover: #252932;
+
+  /* Borders */
+  --bryt-border: rgba(255, 255, 255, 0.08);
+  --bryt-border-strong: rgba(255, 255, 255, 0.16);
+
+  /* Text */
+  --bryt-fg: #f5f6f8;
+  --bryt-fg-muted: #9aa0ab;
+  --bryt-fg-subtle: #5d636e;
+
+  /* Semantic accents (domain-bound — see CLAUDE.md §Design System) */
+  --bryt-accent-pace: #00e599; /* target / aerobic efficiency */
+  --bryt-accent-load: #ff5a36; /* mechanical stress / quads */
+  --bryt-accent-nutrition: #3b82f6; /* carbs, protein, recovery */
+  --bryt-on-accent: #090a0c;
+
+  /* Radii */
+  --bryt-radius-container: 1.5rem; /* rounded-3xl */
+  --bryt-radius-card: 1rem; /* rounded-2xl */
+  --bryt-radius-pill: 9999px; /* rounded-full */
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+
+  --bryt-canvas: #f6f7f9;
+  --bryt-surface: #ffffff;
+  --bryt-elevated: #eef0f3;
+  --bryt-elevated-hover: #e4e7ec;
+
+  --bryt-border: rgba(9, 10, 12, 0.08);
+  --bryt-border-strong: rgba(9, 10, 12, 0.16);
+
+  --bryt-fg: #090a0c;
+  --bryt-fg-muted: #5d636e;
+  --bryt-fg-subtle: #9aa0ab;
+
+  --bryt-accent-pace: #00b87a;
+  --bryt-accent-load: #f04a24;
+  --bryt-accent-nutrition: #2563eb;
+  --bryt-on-accent: #ffffff;
+}
+
+/* ==========================================================================
+   Base
+   ========================================================================== */
+
+@layer base {
+  html {
+    background-color: var(--bryt-canvas);
+  }
+
+  body {
+    background-color: var(--bryt-canvas);
+    color: var(--bryt-fg);
+    font-family: var(--font-inter), system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  h1,
+  h2,
+  h3,
+  h4 {
+    font-family: var(--font-jakarta), var(--font-inter), sans-serif;
+    letter-spacing: -0.02em;
+  }
+
+  ::selection {
+    background-color: color-mix(in srgb, var(--bryt-accent-pace) 30%, transparent);
+  }
+}
+
+/* ==========================================================================
+   Global utilities
+   ========================================================================== */
+
+/* Telemetry numbers: tabular, aligned, geometric. Use on every metric. */
+@utility metric {
+  font-family: var(--font-jakarta), var(--font-inter), sans-serif;
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum" 1, "lnum" 1;
+  letter-spacing: -0.01em;
+}
+
+/* BRYT wordmark */
+@utility wordmark {
+  font-family: var(--font-jakarta), sans-serif;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}

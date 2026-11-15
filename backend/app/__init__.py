@@ -1,0 +1,1 @@
+"""BRYT backend application package."""
