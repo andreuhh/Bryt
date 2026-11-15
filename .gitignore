@@ -9,6 +9,8 @@ __pycache__/
 .venv/
 *.egg-info/
 .pytest_cache/
+.coverage
+htmlcov/
 .mypy_cache/
 .ruff_cache/
 
@@ -19,7 +21,14 @@ out/
 *.tsbuildinfo
 next-env.d.ts
 
-# Uploaded .fit files (never commit athlete data)
+# Athlete data: uploaded/stored activity files must never be committed
 backend/storage/
+*.fit
+*.fit.gz
+
+# Editors & local tool settings
+.vscode/
+.idea/
+.claude/settings.local.json
 
 .DS_Store
