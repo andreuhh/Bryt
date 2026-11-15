@@ -22,7 +22,9 @@ docker-compose.yml   PostgreSQL 16 locale (prod: Supabase-compatibile)
 docker compose up -d db                                   # Postgres locale
 cd backend && python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
 .venv/bin/uvicorn app.main:app --reload                   # API → http://localhost:8000/api/v1
-.venv/bin/pytest && .venv/bin/ruff check app tests && .venv/bin/mypy app
+.venv/bin/alembic upgrade head                            # applica le migrazioni
+.venv/bin/alembic revision --autogenerate -m "..."         # dopo ogni modifica ai modelli
+.venv/bin/pytest && .venv/bin/ruff check app tests migrations && .venv/bin/mypy app
 cd frontend && npm install && npm run dev                 # UI  → http://localhost:3000
 npm run build && npm run lint
 ```
@@ -69,6 +71,34 @@ npm run build && npm run lint
 6. **Nessun valore fisiologico hardcoded** (vedi §5).
 7. Modello LLM configurabile via `ANTHROPIC_MODEL` (default `claude-opus-5-5`).
 
+### Modello dati (Shared State)
+
+| Tabella | Note |
+|---------|------|
+| `users` | `id` = UUID di **Supabase Auth** (`auth.users.id`), mai generato dal backend |
+| `user_lifestyle_profiles` | 1:1 con user (`UNIQUE user_id`). API key Intervals solo in `intervals_api_key_encrypted` |
+| `personal_bests` | una riga per PB (storico): la calibrazione pesa i PB **recenti** |
+| `training_plans` | `blocks` JSONB = `list[PlanBlock]` |
+| `workouts` | `PLANNED`/`COMPLETED`/`MODIFIED`; `structure` JSONB = `list[WorkoutStep]`; `original_snapshot` prima di una modifica agent |
+| `activities` | dedup `UNIQUE(user_id, source, external_id)` e `UNIQUE(user_id, fit_sha256)`; `context_tags` JSONB = `ContextTags` |
+| `activity_streams` | serie temporali 1:1 con activity, array allineati su `elapsed_s` |
+| `agent_execution_logs` | input/output JSON, `pipeline_run_id` per la cascata, feedback 👍/👎 |
+
+Regole:
+- Tabelle in `app/models/`, mixin in `base.py` (`IdMixin`, `TimestampMixin`, `TenantMixin`).
+  Ogni tabella di dominio eredita `TenantMixin` (`user_id` FK `users.id` `ON DELETE CASCADE`).
+- **Enum come VARCHAR** (`enum_column()`), mai tipi enum nativi PG. Enum in `app/models/enums.py`.
+- **La forma dei JSONB è definita in `app/schemas/`**: validare con Pydantic prima di scrivere.
+- Niente `Relationship()` SQLModel (lazy loading incompatibile con async): query esplicite
+  sempre filtrate per `user_id`.
+- Ogni modifica ai modelli → nuova migrazione Alembic; `alembic check` deve restare pulito.
+- Schemi: `StrictModel` (`extra="forbid"`) per input e output agent, `ORMModel`
+  (`from_attributes`) per le letture. La API key è `SecretStr` in input e non compare in alcun
+  `*Read` (solo `intervals_connected: bool`).
+- Output agent in `app/schemas/agents.py`: `PlanGenerationOutput`, `PlanAdjustmentOutput`,
+  `MechanicalLoadOutput`, `NutritionRecoveryOutput` (bipartito). Coerenza garantita da
+  validator (es. `plan_adjustment_needed=true` ⇔ `adjustment_request` presente).
+
 ---
 
 ## 3. Pipeline Multi-Agent
@@ -91,20 +121,65 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
     settimane di carico/scarico.
 - **MechanicalLoadAgent**: post-parsing. Confronta eseguito vs pianificato, stress meccanico
   relativo al background, *Cadence vs HR Divergence*, fattori contestuali. Output JSON con flag.
+- **Coach chat** (`AgentName.COACH_CHAT`): risponde sullo shared state; può solo *proporre*
+  una modifica (`proposed_adjustment`), applicata solo dopo conferma via `POST /plans/adjust`.
 - **NutritionRecoveryAgent**: unico agent con output **bipartito**:
   - `nutrition_protocol`: carboidrati, proteine per riparazione muscolare, elettroliti, timing
     caffeina rispetto all'orario di corsa.
   - `recovery_protocol`: sonno, mobilità, gestione jet lag/stress.
 
-### Endpoint pianificati
+### Endpoint
 | Metodo | Path | Step |
 |--------|------|------|
-| GET  | `/api/v1/health` | 1 |
-| POST | `/api/v1/integrations/intervals/sync` | 3 |
-| POST | `/api/v1/integrations/intervals/webhook` | 3 |
-| POST | `/api/v1/activities/upload-fit` | 3 |
-| POST | `/api/v1/plans/generate` | 4 |
-| POST | `/api/v1/chat` | 4 |
+| GET  | `/api/v1/health` | 1 ✅ |
+| GET  | `/api/v1/me`, `/api/v1/me/profile` | 3 ✅ |
+| PUT  | `/api/v1/me/onboarding` (profilo + PB + credenziali Intervals verificate live) | 3 ✅ |
+| POST | `/api/v1/integrations/intervals/sync` | 3 ✅ |
+| POST | `/api/v1/integrations/intervals/webhook` (pubblico, autenticato dal `secret`) | 3 ✅ |
+| POST | `/api/v1/activities/upload-fit` (201 nuovo / 200 già presente) | 3 ✅ |
+| POST | `/api/v1/plans/generate` (archivia il piano attivo precedente) | 4 ✅ |
+| GET  | `/api/v1/plans/active`, `/api/v1/workouts?from=&to=` (calendario) | 4 ✅ |
+| POST | `/api/v1/plans/adjust` (conferma la proposta della chat) | 4 ✅ |
+| POST | `/api/v1/chat` (stateless: il client invia la conversazione) | 4 ✅ |
+| GET  | `/api/v1/activities`, `/{id}`, `/{id}/streams`, `/{id}/report` | 4 ✅ |
+| PATCH | `/api/v1/activities/{id}/context` (tag → rilancia la pipeline) | 4 ✅ |
+| POST | `/api/v1/activities/{id}/analyze` (pipeline sincrona) | 4 ✅ |
+| POST | `/api/v1/agent-runs/{id}/feedback` (👍/👎) | 4 ✅ |
+
+### Implementazione agent (`app/agents/`)
+- `llm.py`: `LLMClient` protocol + `AnthropicLLM` (`client.beta.messages.stream`,
+  `output_format=<Pydantic>`, `thinking: adaptive`, `output_config.effort` esplicito,
+  `cache_control` automatico, refusal fallback server-side `fallbacks="default"` + beta
+  `server-side-fallback-2026-07-01`). Errori → `AgentUnavailableError` (503),
+  `AgentRefusalError` (422), `AgentOutputError`/`AgentError` (502).
+- `runner.py`: unico punto di chiamata. Ogni esecuzione → riga `AgentExecutionLog` (anche in
+  errore). Validator deterministici di dominio (giorni disponibili, zone esistenti, finestra
+  date, id dei workout, alert di breakdown coerente) → **un** retry con le violazioni come feedback.
+- `prompts.py`: system prompt statici (cacheabili); dati variabili solo nel turno utente
+  (`<context>` JSON con chiavi ordinate). Testo per l'atleta in italiano.
+- `context.py`: viste read-only dello shared state (mai la API key Intervals).
+- `pipeline.py`: cascata post-attività con `pipeline_run_id` condiviso. Lanciata in
+  background (`get_pipeline_launcher`, disattivabile con `AGENTS_ENABLED=false`) dopo upload,
+  sync Intervals, webhook e aggiornamento dei tag.
+- Effort: piano `high`; analisi, adattamento, nutrizione `medium`; chat `low`.
+- Piano: blocchi su tutto l'orizzonte, workout giornalieri solo per `PLAN_DETAIL_WEEKS` (3).
+- Test: `tests/agent_fakes.FakeLLM` (nessuna chiamata di rete nei test).
+
+### Servizi deterministici di contesto
+- `services/calibration.py`: soglia ≈ passo sostenibile 60' dai PB (Riegel, esponente 1.06;
+  preferiti PB piani ≤ 12 mesi). Zone Friel (% FC soglia / % passo soglia) + zona `DT`
+  (double threshold, sotto LT2). FC soglia stimata al 90% della FC max se assente.
+- `services/history.py`: baseline 28 giorni (volume, passo, cadenza, superfici, rapporto
+  acuto:cronico) e `elevation_quality` (totali del dispositivo vs dislivello ricalcolato dalla
+  serie: se incoerenti → altitudine non affidabile, es. GPS senza barometro).
+
+### Autenticazione (`app/core/auth.py`, `app/api/deps.py`)
+- Produzione: `Authorization: Bearer <access token Supabase>`, verificato via JWKS
+  (`{SUPABASE_URL}/auth/v1/.well-known/jwks.json`, audience `authenticated`); HS256 solo se
+  `SUPABASE_JWT_SECRET` è impostato (progetti legacy).
+- Sviluppo (`ENVIRONMENT=development`): header `X-Dev-User-Id: <uuid>`. Disattivato altrove.
+- `CurrentUser` crea la riga `users` al primo accesso. Ogni endpoint di dominio usa
+  `CurrentUser` e filtra per `user.id`.
 
 ---
 
@@ -113,15 +188,29 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
 1. **Intervals.icu (primario)**
    - Onboarding: l'utente inserisce **Athlete ID** (es. `i12345`) e **API Key** personale
      (Intervals.icu → Settings → Developer Settings).
-   - Auth: **HTTP Basic**, username letterale `API_KEY`, password = chiave dell'utente.
-   - `GET https://intervals.icu/api/v1/athlete/{id}/activities` per la lista;
-     endpoint `/activity/{activity_id}/fit-file` per il `.fit` originale.
-   - Webhook in ingresso per notifiche di nuove attività (validare il segreto condiviso).
-   - Deduplicare per ID attività esterno; sync idempotente.
-2. **Upload manuale `.fit` (fallback universale)**: drag & drop di file esportati da Garmin
-   Connect, Coros, Strava ("Esporta originale"). Stesso parser, stessa pipeline.
+   - Auth: **HTTP Basic**, username letterale `API_KEY`, password = chiave dell'utente
+     (Bearer con la API key personale → 403).
+   - `GET /athlete/{id}/activities?oldest=YYYY-MM-DD&newest=YYYY-MM-DD` per la lista.
+   - `GET /activity/{id}/file` = file **originale** (gzip; può essere fit/gpx/tcx): usato se
+     `file_type == "fit"`. Altrimenti `GET /activity/{id}/fit-file` (FIT rigenerato da Intervals).
+   - Tipi importati: `Run`, `TrailRun`, `VirtualRun`. Le attività di origine **Strava** non
+     hanno file via API (ToS Strava) → `NO_FILE`.
+   - **Webhook**: configurabili solo per un'app Intervals.icu registrata (OAuth). Con le API key
+     personali il canale automatico è la **sync** (pulsante dashboard / job periodico). Payload
+     `{secret, events:[{athlete_id, type, activity}]}`; eventi `ACTIVITY_UPLOADED`/
+     `ACTIVITY_ANALYZED`; rispondere sempre 2xx velocemente (Intervals ritenta), lavoro in
+     background. Activity webhook non inviati per attività Strava.
+   - Dedup: `UNIQUE(user_id, source, external_id)` + hash del file; sync idempotente.
+2. **Upload manuale `.fit` (fallback universale)**: `.fit`, `.fit.gz` o `.zip` di Garmin
+   Connect ("Esporta originale"), Coros, Strava. Stesso parser, stessa pipeline.
+
+Pipeline unica (`services/ingestion.py`): estrazione FIT (`fit_files.py`, decompressione
+limitata) → hash/dedup → `fit_parser.parse_fit` (in thread) → file su storage
+(`fit/{user_id}/{sha256}.fit`) → `Activity` + `ActivityStream` (≤ 3000 punti) → collega il
+`Workout` PLANNED dello stesso giorno locale (AM/PM per Double Threshold) → `COMPLETED`.
 
 Serie estratte dal `.fit`: `timestamp, pace, heart_rate, cadence, elevation, ground_contact_time`.
+La cadenza FIT di corsa è in passi per gamba (strides/min): convertita in **spm** (×2).
 
 ---
 
@@ -137,7 +226,13 @@ Serie estratte dal `.fit`: `timestamp, pace, heart_rate, cadence, elevation, gro
    qualità, se nella frazione finale la FC resta stabile nella zona target dell'atleta ma la
    cadenza cala di **oltre 4-5 passi/min** (o il tempo di contatto al suolo aumenta), segnalare
    cedimento meccanico anche in assenza di deriva cardiaca. Calcolo deterministico in
-   `services/`, interpretazione nel `MechanicalLoadAgent`.
+   `services/fit_parser.py` (`DivergenceThresholds`), interpretazione nel `MechanicalLoadAgent`:
+   - campioni in movimento (≥ 1 m/s), valutazione solo oltre 20' di moving time;
+   - baseline = 10-50% del moving time (salta il riscaldamento), finale = ultimo 20%;
+   - sessioni variabili (CV velocità > 0.15, ripetute) → confronto solo sui campioni "work";
+   - `mechanical_breakdown` = (calo cadenza > 4 spm **o** GCT +4%) **e** FC stabile (±3%)
+     oppure, se fornita, FC finale dentro la zona target dell'atleta;
+   - calcolato anche l'aerobic decoupling (Pa:Hr) per distinguere la deriva cardiaca.
 4. **Anomalie contestuali**: incrociare FC anomala a passo lento con jet lag/viaggi, caffeina
    pre-corsa, qualità del sonno → evitare falsi allarmi di calo di forma.
 5. **Metodologie avanzate**: Double Threshold (scuola norvegese, soglia controllata da
@@ -198,7 +293,7 @@ Gli accenti sono **semantici**: non usarli per decorazione o fuori dal loro domi
 Sviluppo in 5 step sequenziali, con conferma esplicita dell'utente tra uno step e l'altro:
 
 1. ✅ Scaffolding, Design Token & Architettura Base
-2. Database Models & Schemi Pydantic (Shared State)
-3. Motore deterministico di ingestione (Intervals.icu + parser `.fit`)
-4. Pipeline Multi-Agent
+2. ✅ Database Models & Schemi Pydantic (Shared State)
+3. ✅ Motore deterministico di ingestione (Intervals.icu + parser `.fit`)
+4. ✅ Pipeline Multi-Agent
 5. Frontend completo (Revolut UI)

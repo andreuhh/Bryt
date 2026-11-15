@@ -20,13 +20,31 @@ class Settings(BaseSettings):
     # Fernet key used to encrypt per-user secrets (e.g. Intervals.icu API keys) at rest.
     encryption_key: str = ""
 
-    # Anthropic
+    # Supabase Auth. JWKS (asymmetric keys) is used when supabase_url is set;
+    # supabase_jwt_secret only for legacy HS256 projects.
+    supabase_url: str = ""
+    supabase_jwt_secret: str = ""
+    supabase_jwt_audience: str = "authenticated"
+
+    # Anthropic / agents
     anthropic_api_key: str = ""
     anthropic_model: str = "claude-opus-5-5"
+    agents_enabled: bool = True  # run the post-activity pipeline automatically after ingestion
+    plan_detail_weeks: int = 3  # weeks with day-by-day workouts; blocks cover the whole horizon
 
     # Intervals.icu
     intervals_base_url: str = "https://intervals.icu/api/v1"
     intervals_webhook_secret: str = ""
+    intervals_sync_default_days: int = 14
+    intervals_timeout_s: float = 30.0
+
+    # Ingestion
+    storage_dir: str = "storage"
+    max_fit_upload_mb: int = 25
+
+    @property
+    def is_development(self) -> bool:
+        return self.environment == "development"
 
 
 @lru_cache

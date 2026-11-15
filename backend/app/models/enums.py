@@ -1,0 +1,137 @@
+"""Domain enums shared by SQLModel tables and Pydantic schemas.
+
+Persisted as VARCHAR (not native PG enums): adding a value never requires an ALTER TYPE.
+"""
+
+from enum import StrEnum
+
+
+class AthleteBackground(StrEnum):
+    ROAD = "ROAD"
+    TRAIL = "TRAIL"
+    TRACK = "TRACK"  # pista / mezzofondo
+
+
+class TrainingSlot(StrEnum):
+    MORNING = "MORNING"
+    LUNCH = "LUNCH"
+    EVENING = "EVENING"
+
+
+class Weekday(StrEnum):
+    MON = "MON"
+    TUE = "TUE"
+    WED = "WED"
+    THU = "THU"
+    FRI = "FRI"
+    SAT = "SAT"
+    SUN = "SUN"
+
+
+class WorkType(StrEnum):
+    SEDENTARY = "SEDENTARY"
+    PHYSICAL = "PHYSICAL"
+
+
+class Surface(StrEnum):
+    ASPHALT = "ASPHALT"
+    TRAIL = "TRAIL"
+    TRACK = "TRACK"
+    TREADMILL = "TREADMILL"
+    GRAVEL = "GRAVEL"
+    MIXED = "MIXED"
+
+
+class Methodology(StrEnum):
+    TRADITIONAL = "TRADITIONAL"
+    DOUBLE_THRESHOLD = "DOUBLE_THRESHOLD"  # scuola norvegese
+    BLOCK = "BLOCK"  # periodizzazione a blocchi
+
+
+class PlanStatus(StrEnum):
+    DRAFT = "DRAFT"
+    ACTIVE = "ACTIVE"
+    ARCHIVED = "ARCHIVED"
+
+
+class BlockPhase(StrEnum):
+    BASE = "BASE"
+    BUILD = "BUILD"
+    SPECIFIC = "SPECIFIC"
+    PEAK = "PEAK"
+    TAPER = "TAPER"
+    TRANSITION = "TRANSITION"
+
+
+class WeekLoadType(StrEnum):
+    LOAD = "LOAD"
+    DELOAD = "DELOAD"
+    RACE = "RACE"
+
+
+class WorkoutType(StrEnum):
+    EASY = "EASY"
+    RECOVERY = "RECOVERY"
+    LONG = "LONG"
+    THRESHOLD = "THRESHOLD"
+    INTERVALS = "INTERVALS"
+    TEMPO = "TEMPO"
+    HILLS = "HILLS"
+    RACE_PACE = "RACE_PACE"
+    RACE = "RACE"
+    STRENGTH = "STRENGTH"
+    REST = "REST"
+
+
+class WorkoutStatus(StrEnum):
+    PLANNED = "PLANNED"
+    COMPLETED = "COMPLETED"
+    MODIFIED = "MODIFIED"
+
+
+class SessionSlot(StrEnum):
+    SINGLE = "SINGLE"
+    AM = "AM"  # double threshold: sessione mattina
+    PM = "PM"  # double threshold: sessione sera
+
+
+class StepKind(StrEnum):
+    WARMUP = "WARMUP"
+    WORK = "WORK"
+    RECOVERY = "RECOVERY"
+    COOLDOWN = "COOLDOWN"
+
+
+class ActivitySource(StrEnum):
+    INTERVALS = "INTERVALS"
+    MANUAL_UPLOAD = "MANUAL_UPLOAD"
+
+
+class AgentName(StrEnum):
+    TRAINING_PERIODIZATION = "TRAINING_PERIODIZATION"
+    MECHANICAL_LOAD = "MECHANICAL_LOAD"
+    NUTRITION_RECOVERY = "NUTRITION_RECOVERY"
+    COACH_CHAT = "COACH_CHAT"
+
+
+class AgentTrigger(StrEnum):
+    ONBOARDING = "ONBOARDING"
+    POST_ACTIVITY = "POST_ACTIVITY"
+    ADJUSTMENT = "ADJUSTMENT"
+    CHAT = "CHAT"
+
+
+class AgentRunStatus(StrEnum):
+    SUCCESS = "SUCCESS"
+    ERROR = "ERROR"
+
+
+class Feedback(StrEnum):
+    UP = "UP"
+    DOWN = "DOWN"
+
+
+class Severity(StrEnum):
+    INFO = "INFO"
+    WARNING = "WARNING"
+    CRITICAL = "CRITICAL"
