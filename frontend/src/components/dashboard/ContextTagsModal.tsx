@@ -9,7 +9,7 @@ import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { useToast } from "@/components/ui/Toast";
 import { activityDay, SURFACE_LABEL } from "@/lib/dashboard";
 import { formatDay, km } from "@/lib/format";
-import { useAnalyzeInBackground, useSaveContext } from "@/lib/queries";
+import { useAnalyzeInBackground, useSaveContext, useWellness } from "@/lib/queries";
 import type { Activity, ContextTags, Surface } from "@/lib/types";
 
 const SURFACES: Surface[] = ["ASPHALT", "GRAVEL", "MIXED", "TRAIL", "TRACK", "TREADMILL"];
@@ -54,12 +54,16 @@ export function ContextTagsModal({
   analysesLeft?: number;
   title?: string;
 }) {
+  // The morning check-in of the run's day pre-fills the sleep (asked once, not twice)
+  const day = activity ? activityDay(activity) : null;
+  const wellness = useWellness(day, day);
   return (
     <Modal open={activity !== null} onClose={onClose} title={title}>
-      {activity && (
+      {activity && !wellness.isPending && (
         <TagsForm
           key={activity.id}
           activity={activity}
+          checkInSleep={wellness.data?.[0]?.sleep_hours ?? null}
           mode={mode}
           analysesLeft={analysesLeft}
           onClose={onClose}
@@ -72,12 +76,14 @@ export function ContextTagsModal({
 
 function TagsForm({
   activity,
+  checkInSleep,
   mode,
   analysesLeft,
   onClose,
   onDone,
 }: {
   activity: Activity;
+  checkInSleep: number | null;
   mode: Mode;
   analysesLeft: number;
   onClose: () => void;
@@ -91,7 +97,7 @@ function TagsForm({
   const str = (v: number | null | undefined) => (v === null || v === undefined ? "" : String(v));
   // Unknown stays unselected: only a surface the athlete actually picks is sent (as certain)
   const [surface, setSurface] = useState<Surface | null>(activity.surface);
-  const [sleepHours, setSleepHours] = useState(str(saved.sleep_hours_prev_night));
+  const [sleepHours, setSleepHours] = useState(str(saved.sleep_hours_prev_night ?? checkInSleep));
   const [sleepQuality, setSleepQuality] = useState(str(saved.sleep_quality));
   const [caffeine, setCaffeine] = useState<string>(nearestCaffeine(saved.caffeine_mg));
   const [caffeineBefore, setCaffeineBefore] = useState(str(saved.caffeine_minutes_before));

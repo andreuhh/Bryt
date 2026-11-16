@@ -40,3 +40,4 @@ export type PlanAdjustResult = Schemas["PlanAdjustResult"];
 export type ChatMessage = Schemas["ChatMessage"];
 export type ChatQuota = Schemas["ChatQuota"];
 export type ProfileUpdate = Schemas["ProfileUpdate"];
+export type DailyWellness = Schemas["DailyWellnessRead"];

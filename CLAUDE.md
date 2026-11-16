@@ -99,6 +99,11 @@ npm run build && npm run lint
 - **Tetto analisi per corsa**: `MAX_ANALYSES_PER_ACTIVITY` (default 2 = prima analisi + una
   rianalisi) sulle analisi richieste dall'atleta (`/analyze`, `PATCH /context?analyze=true` → 429
   oltre il tetto); `GET /report` espone `analyses_left`. Le analisi fallite non contano.
+- **Check-in mattutino** (`CheckInCard` in cima alla dashboard): ore dormite + come ti senti
+  (emoji 1-5), ogni tocco salva, compilato si riduce a una riga. Facoltativo, nessun promemoria.
+  Pre-compila il sonno nella modale dei tag. Agli agent arriva `wellness`
+  (`services/wellness.wellness_summary`: check-in del giorno, media ultimi 7 giorni vs i 28
+  precedenti) in analisi, nutrizione, chat e aggiornamento settimanale.
 - **Sync all'apertura**: la dashboard lancia una sync se l'ultima (`intervals_synced_at`) ha più
   di 10'; le corse nuove vengono seguite nella card "Ultima analisi".
 - **Chat** (`/chat`): stateless lato backend; la conversazione vive nel client (`localStorage["bryt-chat"]`,
@@ -146,6 +151,7 @@ npm run build && npm run lint
 | `workout_revisions` | cronologia (`APPLIED`) e proposte (`PENDING` → `APPLIED`/`REJECTED`/`SUPERSEDED`) con `before`/`after` = `WorkoutDraft` e `reason` |
 | `activities` | dedup `UNIQUE(user_id, source, external_id)` e `UNIQUE(user_id, fit_sha256)`; `context_tags` JSONB = `ContextTags` |
 | `activity_streams` | serie temporali 1:1 con activity, array allineati su `elapsed_s` |
+| `daily_wellness` | check-in mattutino: `UNIQUE(user_id, day)`, `sleep_hours` (fasce: 5 = ≤5, 9 = 9+), `feeling` 1-5; entrambi facoltativi (mancante = sconosciuto) |
 | `agent_execution_logs` | input/output JSON, `pipeline_run_id` per la cascata, feedback 👍/👎 |
 
 Regole:
@@ -209,6 +215,7 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
 | GET  | `/api/v1/workouts/{id}/history` (perché una sessione è cambiata) | 4 ✅ |
 | POST | `/api/v1/plans/adjust` (conferma la proposta della chat) | 4 ✅ |
 | POST | `/api/v1/chat` (stateless: il client invia la conversazione) | 4 ✅ |
+| GET  | `/api/v1/wellness?from=&to=`; PUT `/api/v1/wellness/{day}` (check-in, oggi e 7 giorni prima) | 5 ✅ |
 | GET  | `/api/v1/chat/quota` (messaggi rimasti oggi; `CHAT_DAILY_LIMIT`, default 15) | 5 ✅ |
 | GET  | `/api/v1/activities`, `/{id}`, `/{id}/streams`, `/{id}/report` | 4 ✅ |
 | PATCH | `/api/v1/activities/{id}/context` (tag; `?analyze=true` avvia la pipeline, altrimenti solo salvataggio) | 5 ✅ |

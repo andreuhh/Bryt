@@ -16,14 +16,13 @@ Le misure soggettive di benessere sono valide e usate nello sport d'élite (Saw,
 BJSM 2016: le misure auto-riferite riflettono il carico meglio di molte misure oggettive):
 il dato dichiarato resta la base, l'automatico è un complemento.
 
-### 1a. Check-in mattutino (web, per tutti)
-- Riquadro in cima alla dashboard, ~10 secondi, una volta al giorno:
-  ore di sonno · qualità del sonno 1-5 · **gambe/indolenzimento 1-5** · energia/fatica 1-5 · stress 1-5.
-- Nuova tabella giornaliera `daily_wellness` (user_id, date, campi sopra, `source` = MANUAL / INTERVALS).
-- Gli agent ricevono il **trend** degli ultimi 7-14 giorni (non un valore isolato), incluso nei
-  giorni senza corsa; l'indolenzimento gambe è un segnale diretto di carico eccentrico.
-- La modale post-corsa si **pre-compila** con il check-in del giorno.
-- Aggiornamento settimanale del piano: usa il trend di benessere per confermare/alleggerire.
+### 1a. Check-in mattutino ✅ (16/11/2026)
+- Fatto in versione minima per decisione dell'utente (impatto minimo sulla vita dell'atleta):
+  solo **ore dormite** (fasce ≤5…9+) e **come ti senti** (emoji 1-5). Niente gambe, qualità
+  del sonno o stress separati. Tabella `daily_wellness`, trend 7 vs 28 giorni agli agent,
+  pre-compilazione del sonno nella modale dei tag.
+- Da aggiungere con l'import 1b: colonna `source` (CHECKIN / INTERVALS) per distinguere il dato
+  del dispositivo da quello dichiarato.
 
 ### 1b. Import automatico da Intervals.icu (chi ha un dispositivo notturno)
 - Intervals.icu raccoglie i dati Wellness (sonno, HRV, FC a riposo, ecc.) dai dispositivi collegati.

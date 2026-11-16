@@ -538,6 +538,43 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/api/v1/wellness": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Read Wellness */
+        get: operations["read_wellness_api_v1_wellness_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/api/v1/wellness/{day}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        /**
+         * Save Check In
+         * @description Morning check-in (idempotent: the athlete can change an answer).
+         */
+        put: operations["save_check_in_api_v1_wellness__day__put"];
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
 }
 export type webhooks = Record<string, never>;
 export interface components {
@@ -959,6 +996,23 @@ export interface components {
             estimated_hr_impact_bpm?: number | null;
             /** Explanation */
             explanation: string;
+        };
+        /** DailyWellnessRead */
+        DailyWellnessRead: {
+            /**
+             * Id
+             * Format: uuid
+             */
+            id: string;
+            /**
+             * Day
+             * Format: date
+             */
+            day: string;
+            /** Sleep Hours */
+            sleep_hours: number | null;
+            /** Feeling */
+            feeling: number | null;
         };
         /** Electrolytes */
         Electrolytes: {
@@ -1773,6 +1827,19 @@ export interface components {
          * @enum {string}
          */
         Weekday: "MON" | "TUE" | "WED" | "THU" | "FRI" | "SAT" | "SUN";
+        /** WellnessCheckIn */
+        WellnessCheckIn: {
+            /**
+             * Sleep Hours
+             * @description Hours slept; check-in buckets: 5 = 5 h or less, 9 = 9 h or more
+             */
+            sleep_hours?: number | null;
+            /**
+             * Feeling
+             * @description How the athlete feels (energy, stress, overall): 1 exhausted … 5 great
+             */
+            feeling?: number | null;
+        };
         /**
          * WorkType
          * @enum {string}
@@ -2895,6 +2962,77 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentExecutionLogRead"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    read_wellness_api_v1_wellness_get: {
+        parameters: {
+            query?: {
+                from?: string | null;
+                to?: string | null;
+            };
+            header?: {
+                "x-dev-user-id"?: string | null;
+            };
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyWellnessRead"][];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    save_check_in_api_v1_wellness__day__put: {
+        parameters: {
+            query?: never;
+            header?: {
+                "x-dev-user-id"?: string | null;
+            };
+            path: {
+                day: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["WellnessCheckIn"];
+            };
+        };
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyWellnessRead"];
                 };
             };
             /** @description Validation Error */

@@ -1887,6 +1887,173 @@
      }
     }
    }
+  },
+  "/api/v1/wellness": {
+   "get": {
+    "tags": [
+     "wellness"
+    ],
+    "summary": "Read Wellness",
+    "operationId": "read_wellness_api_v1_wellness_get",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "from",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "date"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "From"
+      }
+     },
+     {
+      "name": "to",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string",
+         "format": "date"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "To"
+      }
+     },
+     {
+      "name": "x-dev-user-id",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "X-Dev-User-Id"
+      }
+     }
+    ],
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "type": "array",
+         "items": {
+          "$ref": "#/components/schemas/DailyWellnessRead"
+         },
+         "title": "Response Read Wellness Api V1 Wellness Get"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
+  },
+  "/api/v1/wellness/{day}": {
+   "put": {
+    "tags": [
+     "wellness"
+    ],
+    "summary": "Save Check In",
+    "description": "Morning check-in (idempotent: the athlete can change an answer).",
+    "operationId": "save_check_in_api_v1_wellness__day__put",
+    "security": [
+     {
+      "HTTPBearer": []
+     }
+    ],
+    "parameters": [
+     {
+      "name": "day",
+      "in": "path",
+      "required": true,
+      "schema": {
+       "type": "string",
+       "format": "date",
+       "title": "Day"
+      }
+     },
+     {
+      "name": "x-dev-user-id",
+      "in": "header",
+      "required": false,
+      "schema": {
+       "anyOf": [
+        {
+         "type": "string"
+        },
+        {
+         "type": "null"
+        }
+       ],
+       "title": "X-Dev-User-Id"
+      }
+     }
+    ],
+    "requestBody": {
+     "required": true,
+     "content": {
+      "application/json": {
+       "schema": {
+        "$ref": "#/components/schemas/WellnessCheckIn"
+       }
+      }
+     }
+    },
+    "responses": {
+     "200": {
+      "description": "Successful Response",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/DailyWellnessRead"
+        }
+       }
+      }
+     },
+     "422": {
+      "description": "Validation Error",
+      "content": {
+       "application/json": {
+        "schema": {
+         "$ref": "#/components/schemas/HTTPValidationError"
+        }
+       }
+      }
+     }
+    }
+   }
   }
  },
  "components": {
@@ -3231,6 +3398,50 @@
      "explanation"
     ],
     "title": "ContextualFactorAssessment"
+   },
+   "DailyWellnessRead": {
+    "properties": {
+     "id": {
+      "type": "string",
+      "format": "uuid",
+      "title": "Id"
+     },
+     "day": {
+      "type": "string",
+      "format": "date",
+      "title": "Day"
+     },
+     "sleep_hours": {
+      "anyOf": [
+       {
+        "type": "number"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sleep Hours"
+     },
+     "feeling": {
+      "anyOf": [
+       {
+        "type": "integer"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Feeling"
+     }
+    },
+    "type": "object",
+    "required": [
+     "id",
+     "day",
+     "sleep_hours",
+     "feeling"
+    ],
+    "title": "DailyWellnessRead"
    },
    "Electrolytes": {
     "properties": {
@@ -6098,6 +6309,41 @@
      "SUN"
     ],
     "title": "Weekday"
+   },
+   "WellnessCheckIn": {
+    "properties": {
+     "sleep_hours": {
+      "anyOf": [
+       {
+        "type": "number",
+        "maximum": 14.0,
+        "minimum": 0.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Sleep Hours",
+      "description": "Hours slept; check-in buckets: 5 = 5 h or less, 9 = 9 h or more"
+     },
+     "feeling": {
+      "anyOf": [
+       {
+        "type": "integer",
+        "maximum": 5.0,
+        "minimum": 1.0
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Feeling",
+      "description": "How the athlete feels (energy, stress, overall): 1 exhausted … 5 great"
+     }
+    },
+    "additionalProperties": false,
+    "type": "object",
+    "title": "WellnessCheckIn"
    },
    "WorkType": {
     "type": "string",

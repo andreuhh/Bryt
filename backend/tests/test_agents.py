@@ -527,6 +527,9 @@ async def test_upload_launches_pipeline_once_and_report_endpoint(
     report = (await client.post(f"/activities/{activity_id}/analyze", headers=_h(athlete))).json()
     assert report["mechanical_load"]["status"] == "SUCCESS"
     assert report["plan_adjustment"] is None
+    # The morning check-in (empty here) reaches both post-activity agents
+    for model in (MechanicalLoadOutput, NutritionRecoveryOutput):
+        assert '"wellness"' in llm.calls_for(model)[-1].prompt
     assert report["nutrition_recovery"]["output"]["nutrition_protocol"]["caffeine"]
 
     feedback = await client.post(

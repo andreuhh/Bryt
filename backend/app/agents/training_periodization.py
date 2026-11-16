@@ -24,6 +24,7 @@ from app.agents.context import (
     athlete_context,
     dump_workout,
     local_today,
+    wellness_context,
     workouts_between,
 )
 from app.agents.llm import LLMClient
@@ -336,6 +337,7 @@ async def refine_plan(
     ]
     ctx, calibration = await athlete_context(session, user, today)
     variable = {
+        "wellness": await wellness_context(session, user.id, today),
         "baseline_28d": (
             await training_baseline(
                 session,

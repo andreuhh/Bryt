@@ -5,7 +5,13 @@ import uuid
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.agents import prompts
-from app.agents.context import athlete_context, dump_activity, local_today, plan_context
+from app.agents.context import (
+    athlete_context,
+    dump_activity,
+    local_today,
+    plan_context,
+    wellness_context,
+)
 from app.agents.llm import LLMClient
 from app.agents.runner import run_agent
 from app.models import Activity, AgentExecutionLog, User
@@ -33,6 +39,7 @@ async def recommend(
         "mechanical_load_analysis": mechanical.model_dump(mode="json"),
         "plan_adjustment": adjustment.model_dump(mode="json") if adjustment else None,
         "next_sessions": plan.get("upcoming_workouts", []),
+        "wellness": await wellness_context(session, user.id, today),
     }
     return await run_agent(
         session,

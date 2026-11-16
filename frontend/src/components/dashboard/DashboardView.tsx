@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { useMemo, useState } from "react";
 
+import { CheckInCard } from "@/components/dashboard/CheckInCard";
 import { ContextTagsModal } from "@/components/dashboard/ContextTagsModal";
 import { LatestAnalysis } from "@/components/dashboard/LatestAnalysis";
 import { NextKeyTile, WeekVolumeTile } from "@/components/dashboard/StatTiles";
@@ -81,6 +82,8 @@ export function DashboardView() {
           </p>
         )}
       </header>
+
+      <CheckInCard today={today} />
 
       {(proposals.data?.length ?? 0) > 0 && (
         <Link

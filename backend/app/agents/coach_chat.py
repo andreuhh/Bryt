@@ -13,7 +13,13 @@ from sqlmodel import col, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.agents import prompts
-from app.agents.context import athlete_context, dump_activity, local_today, plan_context
+from app.agents.context import (
+    athlete_context,
+    dump_activity,
+    local_today,
+    plan_context,
+    wellness_context,
+)
 from app.agents.llm import AgentError, LLMClient
 from app.agents.runner import run_agent
 from app.core.config import get_settings
@@ -87,6 +93,7 @@ async def chat(
         ).all()
         if log.output
     }
+    variable["wellness"] = await wellness_context(session, user.id, today)
     variable["recent_activities"] = [
         dump_activity(a) | {"latest_analysis_summary": (analyses.get(a.id) or {}).get("summary")}
         for a in recent

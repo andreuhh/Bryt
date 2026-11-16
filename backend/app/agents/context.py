@@ -24,6 +24,7 @@ from app.schemas.user import PersonalBestRead, ProfileRead
 from app.services.calibration import compute_calibration
 from app.services.history import elevation_quality, training_baseline
 from app.services.profile import get_profile
+from app.services.wellness import wellness_summary
 
 # Identifiers, and volatile fields that would break the cached prompt prefix
 _PRIVATE_PROFILE_FIELDS = {
@@ -146,12 +147,22 @@ async def activity_context(session: AsyncSession, activity: Activity) -> dict[st
         exclude_activity_id=activity.id,
         declared_weekly_km=profile.weekly_volume_km if profile else None,
     )
+    user = await session.get(User, activity.user_id)
+    tz = ZoneInfo(user.timezone if user else "Europe/Rome")
     return {
         "activity": dump_activity(activity),
         "planned_workout": dump_workout(planned) if planned else None,
         "elevation_quality": elevation_quality(activity, stream).model_dump(mode="json"),
         "baseline_28d": baseline.model_dump(mode="json"),
+        "wellness": await wellness_context(
+            session, activity.user_id, activity.start_time.astimezone(tz).date()
+        ),
     }
+
+
+async def wellness_context(session: AsyncSession, user_id: uuid.UUID, day: date) -> dict[str, Any]:
+    """Morning check-in of `day` + 7-day trend vs the athlete's own 28-day average."""
+    return (await wellness_summary(session, user_id, day)).model_dump(mode="json")
 
 
 def local_today(user: User, now: datetime | None = None) -> date:

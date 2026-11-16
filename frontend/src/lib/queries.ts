@@ -29,6 +29,7 @@ export const keys = {
   personalBests: ["me", "personal-bests"] as const,
   plan: (planId: string) => ["plan", planId] as const,
   chatQuota: ["chat", "quota"] as const,
+  wellness: (from: string, to: string) => ["wellness", from, to] as const,
 };
 
 export function useActivePlan() {
@@ -327,5 +328,23 @@ export function useUpdateProfile() {
       client.setQueryData(keys.profile, profile);
       if ("default_run_surface" in body) invalidateActivities();
     },
+  });
+}
+
+export function useWellness(from: string | null, to: string | null) {
+  return useQuery({
+    queryKey: keys.wellness(from ?? "", to ?? ""),
+    queryFn: () => unwrap(api.GET("/api/v1/wellness", { params: { query: { from: from!, to: to! } } })),
+    enabled: Boolean(from && to),
+  });
+}
+
+/** Morning check-in: every tap saves (no "save" button), idempotent per day. */
+export function useSaveCheckIn() {
+  const client = useQueryClient();
+  return useMutation({
+    mutationFn: ({ day, sleep_hours, feeling }: { day: string; sleep_hours: number | null; feeling: number | null }) =>
+      unwrap(api.PUT("/api/v1/wellness/{day}", { params: { path: { day } }, body: { sleep_hours, feeling } })),
+    onSuccess: () => void client.invalidateQueries({ queryKey: ["wellness"] }),
   });
 }
