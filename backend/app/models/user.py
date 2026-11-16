@@ -9,7 +9,9 @@ from sqlmodel import Field
 from app.models.base import IdMixin, TenantMixin, TimestampMixin, enum_column, jsonb_column
 from app.models.enums import (
     AthleteBackground,
+    HrSensor,
     Methodology,
+    StrengthSetting,
     Surface,
     TrainingSlot,
     Weekday,
@@ -44,7 +46,8 @@ class UserLifestyleProfile(IdMixin, TimestampMixin, TenantMixin, table=True):
     threshold_hr: int | None = Field(default=None, gt=0, le=230)
     max_hr: int | None = Field(default=None, gt=0, le=240)
     resting_hr: int | None = Field(default=None, gt=0, le=120)
-    weekly_volume_km: float | None = Field(default=None, ge=0)
+    weekly_volume_km: float | None = Field(default=None, ge=0)  # usual, last 8-12 weeks
+    peak_volume_km: float | None = Field(default=None, ge=0)  # highest week in a past build-up
 
     # Target race
     target_race_name: str | None = Field(default=None, max_length=160)
@@ -65,6 +68,21 @@ class UserLifestyleProfile(IdMixin, TimestampMixin, TenantMixin, table=True):
     methodology: Methodology = Field(
         default=Methodology.TRADITIONAL, sa_column=enum_column(Methodology)
     )
+    double_sessions_ok: bool = Field(default=False, sa_column_kwargs={"server_default": "false"})
+    long_run_day: Weekday | None = Field(
+        default=None, sa_column=enum_column(Weekday, nullable=True)
+    )
+    strength_sessions_per_week: int = Field(
+        default=0, ge=0, le=7, sa_column_kwargs={"server_default": "0"}
+    )
+    strength_setting: StrengthSetting = Field(
+        default=StrengthSetting.NONE,
+        sa_column=enum_column(StrengthSetting, server_default=StrengthSetting.NONE),
+    )
+    hr_sensor: HrSensor | None = Field(default=None, sa_column=enum_column(HrSensor, nullable=True))
+    injury_notes: str | None = Field(default=None, max_length=1000)
+    # Free text for the agents (e.g. how the last race went, fueling, constraints)
+    coach_notes: str | None = Field(default=None, max_length=2000)
 
     # Intervals.icu integration — API key is ONLY stored Fernet-encrypted
     intervals_athlete_id: str | None = Field(default=None, max_length=32)

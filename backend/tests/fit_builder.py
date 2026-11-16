@@ -139,6 +139,7 @@ def synthetic_run(
     final_cadence_drop: float = 0,
     final_hr_rise: int = 0,
     final_gct_rise: float = 0,
+    final_speed_drop: float = 0,
     seed: int = 7,
 ) -> list[Sample]:
     rng = np.random.default_rng(seed)
@@ -148,7 +149,7 @@ def synthetic_run(
     distance = 0.0
     for i in range(n):
         final = i >= final_start
-        speed = speed_mps + rng.normal(0, 0.05)
+        speed = speed_mps - (final_speed_drop if final else 0) + rng.normal(0, 0.05)
         distance += speed
         samples.append(
             Sample(

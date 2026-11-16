@@ -2,13 +2,15 @@
 
 AnthropicLLM uses the Messages API with structured outputs (`output_format=<Pydantic model>`,
 validated client-side by the SDK), adaptive thinking, explicit effort, streaming (plans can be
-long) and server-side refusal fallbacks (`fallbacks="default"`).
+long), an explicit cache breakpoint after the stable prefix and server-side refusal fallbacks
+(`fallbacks="default"`).
 """
 
 from dataclasses import dataclass
 from typing import Generic, Literal, Protocol, TypeVar
 
 import anthropic
+from anthropic.types.beta import BetaMessageParam, BetaTextBlockParam
 from pydantic import BaseModel, ValidationError
 
 from app.core.config import get_settings
@@ -40,8 +42,10 @@ class AgentOutputError(AgentError):
 class LLMResult(Generic[T]):
     parsed: T
     model: str
-    input_tokens: int | None = None
+    input_tokens: int | None = None  # uncached input only
     output_tokens: int | None = None
+    cache_creation_input_tokens: int | None = None
+    cache_read_input_tokens: int | None = None
 
 
 class LLMClient(Protocol):
@@ -56,6 +60,7 @@ class LLMClient(Protocol):
         output_model: type[T],
         effort: Effort,
         max_tokens: int,
+        cached_prefix: str | None = None,
     ) -> LLMResult[T]: ...
 
 
@@ -80,17 +85,26 @@ class AnthropicLLM:
         output_model: type[T],
         effort: Effort,
         max_tokens: int,
+        cached_prefix: str | None = None,
     ) -> LLMResult[T]:
+        # Cache breakpoint right after the stable prefix (system + athlete context): calls of
+        # the same run (plan blocks, pipeline agents) re-read it instead of re-writing it.
+        content: list[BetaTextBlockParam] = []
+        if cached_prefix:
+            content.append(
+                {"type": "text", "text": cached_prefix, "cache_control": {"type": "ephemeral"}}
+            )
+        content.append({"type": "text", "text": prompt})
+        message: BetaMessageParam = {"role": "user", "content": content}
         try:
             async with self._client.beta.messages.stream(
                 model=self._model,
                 max_tokens=max_tokens,
                 system=system,
-                messages=[{"role": "user", "content": prompt}],
+                messages=[message],
                 thinking={"type": "adaptive"},
                 output_config={"effort": effort},
                 output_format=output_model,
-                cache_control={"type": "ephemeral"},
                 betas=[FALLBACK_BETA],
                 fallbacks="default",
             ) as stream:
@@ -131,6 +145,8 @@ class AnthropicLLM:
             model=final.model,
             input_tokens=final.usage.input_tokens,
             output_tokens=final.usage.output_tokens,
+            cache_creation_input_tokens=final.usage.cache_creation_input_tokens,
+            cache_read_input_tokens=final.usage.cache_read_input_tokens,
         )
 
 

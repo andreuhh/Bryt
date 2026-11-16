@@ -1,11 +1,11 @@
 """Persist the onboarding wizard: user details, lifestyle profile, personal bests."""
 
-from sqlmodel import select
+from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.core.security import encrypt_secret
 from app.models import PersonalBest, User, UserLifestyleProfile
-from app.schemas.user import OnboardingPayload
+from app.schemas.user import OnboardingPayload, ProfileUpdate
 
 
 async def get_profile(session: AsyncSession, user: User) -> UserLifestyleProfile | None:
@@ -18,14 +18,16 @@ async def save_onboarding(
 ) -> UserLifestyleProfile:
     """Upsert the profile (re-running the wizard updates it) and append the given PBs.
 
-    Intervals.icu credentials must already be validated by the caller.
+    Intervals.icu credentials must already be validated by the caller. The API key is
+    write-only (never sent back to the client), so a re-run without credentials keeps the
+    stored ones: disconnecting is an explicit settings action, not a side effect.
     """
     user.display_name = payload.display_name or user.display_name
     user.timezone = payload.timezone
     user.onboarding_completed = True
     session.add(user)
 
-    fields = payload.profile.model_dump(exclude={"intervals_api_key"})
+    fields = payload.profile.model_dump(exclude={"intervals_api_key", "intervals_athlete_id"})
     profile = await get_profile(session, user)
     if profile is None:
         profile = UserLifestyleProfile(user_id=user.id, **fields)
@@ -34,14 +36,47 @@ async def save_onboarding(
             setattr(profile, key, value)
 
     api_key = payload.profile.intervals_api_key
-    profile.intervals_api_key_encrypted = (
-        encrypt_secret(api_key.get_secret_value()) if api_key else None
-    )
+    if api_key is not None:  # the schema guarantees athlete id and key come together
+        profile.intervals_athlete_id = payload.profile.intervals_athlete_id
+        profile.intervals_api_key_encrypted = encrypt_secret(api_key.get_secret_value())
     session.add(profile)
 
-    for pb in payload.personal_bests:
-        session.add(PersonalBest(user_id=user.id, **pb.model_dump()))
+    existing = {
+        (pb.distance_m, pb.time_s, pb.achieved_on)
+        for pb in (
+            await session.exec(select(PersonalBest).where(PersonalBest.user_id == user.id))
+        ).all()
+    }
+    for pb in payload.personal_bests:  # re-running the wizard must not duplicate PBs
+        if (pb.distance_m, pb.time_s, pb.achieved_on) not in existing:
+            session.add(PersonalBest(user_id=user.id, **pb.model_dump()))
 
     await session.commit()
     await session.refresh(profile)
     return profile
+
+
+async def update_profile(
+    session: AsyncSession, profile: UserLifestyleProfile, changes: ProfileUpdate
+) -> UserLifestyleProfile:
+    """Partial update (only fields explicitly sent). Credentials validated by the caller."""
+    data = changes.model_dump(exclude_unset=True, exclude={"intervals_api_key"})
+    for key, value in data.items():
+        setattr(profile, key, value)
+    if changes.intervals_api_key is not None:
+        profile.intervals_api_key_encrypted = encrypt_secret(
+            changes.intervals_api_key.get_secret_value()
+        )
+    session.add(profile)
+    await session.commit()
+    await session.refresh(profile)
+    return profile
+
+
+async def list_personal_bests(session: AsyncSession, user: User) -> list[PersonalBest]:
+    stmt = (
+        select(PersonalBest)
+        .where(PersonalBest.user_id == user.id)
+        .order_by(col(PersonalBest.achieved_on).desc())
+    )
+    return list((await session.exec(stmt)).all())

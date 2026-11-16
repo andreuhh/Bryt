@@ -23,7 +23,7 @@ async def analyze_activity(
     run_id: uuid.UUID,
 ) -> tuple[MechanicalLoadOutput, AgentExecutionLog]:
     ctx, _ = await athlete_context(session, user, local_today(user))
-    ctx |= await activity_context(session, activity)
+    variable = await activity_context(session, activity)
     planned = (
         await session.exec(select(Workout.id).where(Workout.activity_id == activity.id))
     ).first()
@@ -31,7 +31,7 @@ async def analyze_activity(
     def validate(out: MechanicalLoadOutput) -> list[str]:
         if out.execution.workout_id not in (None, planned):
             return [f"execution.workout_id must be {planned} or null"]
-        divergence = ctx["activity"]["computed_metrics"].get("cadence_hr_divergence", {})
+        divergence = variable["activity"]["computed_metrics"].get("cadence_hr_divergence", {})
         codes = {a.code for a in out.alerts}
         if divergence.get("mechanical_breakdown") and "MECHANICAL_BREAKDOWN" not in codes:
             return ["deterministic analysis found a mechanical breakdown: add that alert"]
@@ -46,7 +46,8 @@ async def analyze_activity(
         run_id=run_id,
         system=prompts.MECHANICAL_LOAD,
         task="Analyze the activity in the context.",
-        context=ctx,
+        context=variable,
+        stable_context=ctx,
         output_model=MechanicalLoadOutput,
         effort="medium",
         max_tokens=16000,

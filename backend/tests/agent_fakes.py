@@ -33,10 +33,15 @@ class Call:
     system: str
     prompt: str
     effort: str
+    cached_prefix: str | None = None
 
     @property
     def context(self) -> dict[str, Any]:
-        return extract_context(self.prompt)
+        """Stable (cached) and variable context merged, as the model sees them."""
+        stable = (
+            extract_context(self.cached_prefix, "athlete_context") if self.cached_prefix else {}
+        )
+        return stable | extract_context(self.prompt)
 
 
 @dataclass
@@ -52,14 +57,22 @@ class FakeLLM:
         return self
 
     async def generate(
-        self, *, system: str, prompt: str, output_model: type[T], effort: Effort, max_tokens: int
+        self,
+        *,
+        system: str,
+        prompt: str,
+        output_model: type[T],
+        effort: Effort,
+        max_tokens: int,
+        cached_prefix: str | None = None,
     ) -> LLMResult[T]:
-        self.calls.append(Call(output_model, system, prompt, effort))
+        call = Call(output_model, system, prompt, effort, cached_prefix)
+        self.calls.append(call)
         item = self.responses[output_model].popleft()
         if isinstance(item, Exception):
             raise item
         if callable(item) and not isinstance(item, BaseModel):
-            item = item(extract_context(prompt))
+            item = item(call.context)
         assert isinstance(item, output_model)
         return LLMResult(parsed=item, model=self.model, input_tokens=100, output_tokens=50)
 
@@ -67,9 +80,9 @@ class FakeLLM:
         return [c for c in self.calls if c.output_model is output_model]
 
 
-def extract_context(prompt: str) -> dict[str, Any]:
-    match = re.search(r"<context>\n(.*)\n</context>", prompt, re.S)
-    assert match, "prompt without <context>"
+def extract_context(prompt: str, tag: str = "context") -> dict[str, Any]:
+    match = re.search(rf"<{tag}>\n(.*)\n</{tag}>", prompt, re.S)
+    assert match, f"prompt without <{tag}>"
     data: dict[str, Any] = json.loads(match.group(1))
     return data
 

@@ -60,6 +60,8 @@ from app.services.workouts import (
 )
 
 WEEKDAYS = ("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
+NOT_A_RUN = {WorkoutType.REST, WorkoutType.STRENGTH}
+MAX_KEY_SESSIONS_PER_WEEK = 2
 DEFAULT_HORIZON_WEEKS = 12
 KEY_SESSION_LOOKAHEAD_DAYS = 42  # far-ahead key sessions shown to the weekly refinement
 RECENT_ANALYSES_DAYS = 14
@@ -77,7 +79,7 @@ def _draft_violations(
 ) -> list[str]:
     v: list[str] = []
     weekday = WEEKDAYS[w.scheduled_date.weekday()]
-    if w.workout_type != WorkoutType.REST and weekday not in available:
+    if w.workout_type not in NOT_A_RUN and weekday not in available:
         v.append(f"'{w.title}' on {w.scheduled_date} ({weekday}): not an available day")
     zones = {z.code for z in calibration.zones}
     for step in w.structure:
@@ -151,9 +153,14 @@ async def _build(
     today = local_today(user)
     start, end = plan.start_date, plan.end_date
     ctx, calibration = await athlete_context(session, user, today)
-    ctx["baseline_28d"] = (await training_baseline(session, user.id, _midnight(today))).model_dump(
-        mode="json"
-    )
+    ctx["baseline_28d"] = (
+        await training_baseline(
+            session,
+            user.id,
+            _midnight(today),
+            declared_weekly_km=ctx["athlete"]["weekly_volume_km"],
+        )
+    ).model_dump(mode="json")
     available = set(ctx["athlete"]["available_days"])
 
     skeleton, _ = await run_agent(
@@ -169,7 +176,8 @@ async def _build(
             "block). Blocks must be contiguous and cover the whole range; every week needs a "
             "target_volume_km."
         ),
-        context=ctx,
+        context={},
+        stable_context=ctx,
         output_model=PlanSkeletonOutput,
         effort="high",
         max_tokens=32000,
@@ -186,8 +194,9 @@ async def _build(
     confirm_end = confirmed_until(today)
     previous: list[dict[str, Any]] = []
     for block in sorted(skeleton.blocks, key=lambda b: b.start_date):
-        block_ctx = ctx | {
-            "skeleton": skeleton.model_dump(mode="json"),
+        # Stable across the 5-7 block calls (cached once); only the block itself varies
+        block_stable = ctx | {"skeleton": skeleton.model_dump(mode="json")}
+        block_ctx = {
             "current_block": block.model_dump(mode="json"),
             "previous_block_last_week": previous,
         }
@@ -205,10 +214,13 @@ async def _build(
                 f"{confirm_end}; later workouts provisional (zones only)."
             ),
             context=block_ctx,
+            stable_context=block_stable,
             output_model=BlockWorkoutsOutput,
             effort="medium",
             max_tokens=64000,
-            validate=_block_validator(block, available, calibration),
+            validate=_block_validator(
+                block, available, calibration, ctx["athlete"]["double_sessions_ok"]
+            ),
             plan_id=plan.id,
         )
         session.add_all(new_workout(user.id, plan.id, d, today) for d in out.workouts)
@@ -255,9 +267,9 @@ def _skeleton_violations(out: PlanSkeletonOutput, start: date, end: date) -> lis
 
 
 def _block_validator(
-    block: PlanBlock, available: set[str], calibration: AthleteCalibration
+    block: PlanBlock, available: set[str], calibration: AthleteCalibration, double_ok: bool
 ) -> Callable[[BlockWorkoutsOutput], list[str]]:
-    return lambda out: _block_violations(out, block, available, calibration)
+    return lambda out: _block_violations(out, block, available, calibration, double_ok)
 
 
 def _block_violations(
@@ -265,6 +277,7 @@ def _block_violations(
     block: PlanBlock,
     available: set[str],
     calibration: AthleteCalibration,
+    double_ok: bool,
 ) -> list[str]:
     v: list[str] = []
     dates = [w.scheduled_date for w in out.workouts]
@@ -274,8 +287,16 @@ def _block_violations(
     missing = [d for d in _days(block.start_date, block.end_date) if d not in set(dates)]
     if missing:
         v.append(f"missing days (add a workout or an explicit REST): {missing}")
-    sessions = Counter(w.scheduled_date for w in out.workouts if w.workout_type != WorkoutType.REST)
-    v.extend(f"{d}: more than 2 sessions" for d, n in sessions.items() if n > 2)
+    runs = Counter(w.scheduled_date for w in out.workouts if w.workout_type not in NOT_A_RUN)
+    max_runs = 2 if double_ok else 1
+    v.extend(f"{d}: more than {max_runs} run(s) in a day" for d, n in runs.items() if n > max_runs)
+    keys = Counter(w.scheduled_date.isocalendar()[:2] for w in out.workouts if w.is_key_session)
+    v.extend(
+        f"ISO week {y}-W{wk}: {n} key sessions (max {MAX_KEY_SESSIONS_PER_WEEK}: long run, "
+        "race-pace, test or race only)"
+        for (y, wk), n in keys.items()
+        if n > MAX_KEY_SESSIONS_PER_WEEK
+    )
     for w in out.workouts:
         v.extend(_draft_violations(w, available, calibration))
     return v
@@ -314,9 +335,14 @@ async def refine_plan(
         if w.is_key_session
     ]
     ctx, calibration = await athlete_context(session, user, today)
-    ctx |= {
+    variable = {
         "baseline_28d": (
-            await training_baseline(session, user.id, _midnight(today + timedelta(days=1)))
+            await training_baseline(
+                session,
+                user.id,
+                _midnight(today + timedelta(days=1)),
+                declared_weekly_km=ctx["athlete"]["weekly_volume_km"],
+            )
         ).model_dump(mode="json"),
         "recent_analyses": await _recent_analyses(session, user.id, today),
         "plan_blocks": plan.blocks,
@@ -359,7 +385,8 @@ async def refine_plan(
             f"({window_start} → {window_end}) with full detail. Propose changes to "
             "upcoming_key_sessions only if clearly needed."
         ),
-        context=ctx,
+        context=variable,
+        stable_context=ctx,
         output_model=RefinementOutput,
         effort="high",
         max_tokens=32000,
@@ -441,8 +468,10 @@ async def adjust_plan(
 
     today = local_today(user)
     ctx, calibration = await athlete_context(session, user, today)
-    ctx["adjustment_request"] = request.model_dump(mode="json")
-    ctx["workouts_to_review"] = [dump_workout(w) for w in candidates]
+    variable = {
+        "adjustment_request": request.model_dump(mode="json"),
+        "workouts_to_review": [dump_workout(w) for w in candidates],
+    }
     available = set(ctx["athlete"]["available_days"])
     by_id = {w.id: w for w in candidates}
 
@@ -470,7 +499,8 @@ async def adjust_plan(
         system=prompts.TRAINING_PERIODIZATION,
         task="Adjust the plan: review every workout in workouts_to_review "
         "according to adjustment_request.",
-        context=ctx,
+        context=variable,
+        stable_context=ctx,
         output_model=PlanAdjustmentOutput,
         effort="medium",
         max_tokens=16000,

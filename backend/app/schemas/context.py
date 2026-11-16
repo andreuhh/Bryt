@@ -2,6 +2,7 @@
 
 from pydantic import Field
 
+from app.models.enums import DataCoverage
 from app.schemas.common import StrictModel
 
 
@@ -9,6 +10,13 @@ class TrainingBaseline(StrictModel):
     """The athlete's recent history: the yardstick for 'relative' load and speed."""
 
     window_days: int
+    data_coverage: DataCoverage = Field(
+        description="LOW = recorded history does not reflect the real volume: use declared"
+    )
+    declared_weekly_km: float | None = None
+    effective_weekly_km: float | None = Field(
+        default=None, description="Volume to plan from (declared when coverage is LOW)"
+    )
     activities: int
     total_km: float
     weekly_avg_km: float

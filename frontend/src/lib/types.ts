@@ -1,0 +1,41 @@
+import type { components } from "@/types/api";
+
+type Schemas = components["schemas"];
+
+export type TrainingPlan = Schemas["TrainingPlanRead"];
+export type PlanBlock = Schemas["PlanBlock"];
+export type PlanWeek = Schemas["PlanWeek"];
+export type Workout = Schemas["WorkoutRead"];
+export type WorkoutStep = Schemas["WorkoutStep"];
+export type WorkoutRevision = Schemas["WorkoutRevisionRead"];
+export type WorkoutType = Schemas["WorkoutType"];
+export type Activity = Schemas["ActivityRead"];
+export type Calibration = Schemas["AthleteCalibration"];
+export type TrainingZone = Schemas["TrainingZone"];
+export type Profile = Schemas["ProfileRead"];
+export type RefinementResult = Schemas["RefinementResult"];
+export type ActivityReport = Schemas["ActivityReport"];
+export type AgentLog = Schemas["AgentExecutionLogRead"];
+export type ContextTags = Schemas["ContextTags"];
+export type Surface = Schemas["Surface"];
+export type SyncResult = Schemas["IntervalsSyncResult"];
+export type UploadResult = Schemas["UploadFitResult"];
+export type User = Schemas["UserRead"];
+
+export type MechanicalLoad = Schemas["MechanicalLoadOutput"];
+export type NutritionRecovery = Schemas["NutritionRecoveryOutput"];
+export type AgentAlert = Schemas["Alert"];
+export type ActivityStream = Schemas["ActivityStreamRead"];
+export type Divergence = Schemas["CadenceHrDivergenceMetrics"];
+export type ComputedMetrics = Schemas["ComputedMetrics"];
+export type Feedback = Schemas["Feedback"];
+export type PersonalBest = Schemas["PersonalBestRead"];
+export type OnboardingPayload = Schemas["OnboardingPayload"];
+export type AthleteBackground = Schemas["AthleteBackground"];
+export type Weekday = Schemas["Weekday"];
+export type Methodology = Schemas["Methodology"];
+export type ChatResponse = Schemas["ChatResponse"];
+export type PlanAdjustment = Schemas["PlanAdjustmentRequest"];
+export type PlanAdjustResult = Schemas["PlanAdjustResult"];
+export type ChatMessage = Schemas["ChatMessage"];
+export type ChatQuota = Schemas["ChatQuota"];

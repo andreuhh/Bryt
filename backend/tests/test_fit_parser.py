@@ -75,6 +75,23 @@ def test_ground_contact_rise_alone_triggers_breakdown() -> None:
     assert div.mechanical_breakdown
 
 
+def test_stride_length_collapse_with_stable_hr_is_breakdown() -> None:
+    """NYC pattern: same cadence and HR, pace -20% → shorter stride → muscular breakdown."""
+    div = parse_fit(
+        build_fit(synthetic_run(70, final_speed_drop=0.7))
+    ).computed.cadence_hr_divergence
+    assert not div.cadence_drop_detected
+    assert div.stride_length_change_pct is not None and div.stride_length_change_pct < -15
+    assert div.stride_length_drop_detected and div.mechanical_breakdown
+
+
+def test_stride_collapse_with_rising_hr_is_not_pure_mechanical() -> None:
+    div = parse_fit(
+        build_fit(synthetic_run(70, final_speed_drop=0.7, final_hr_rise=12))
+    ).computed.cadence_hr_divergence
+    assert div.stride_length_drop_detected and not div.mechanical_breakdown
+
+
 def test_small_cadence_drop_below_threshold() -> None:
     div = parse_fit(
         build_fit(synthetic_run(70, final_cadence_drop=2))

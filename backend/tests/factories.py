@@ -13,6 +13,10 @@ def profile_payload(**overrides: Any) -> dict[str, Any]:
         "available_days": ["MON", "WED", "FRI", "SUN"],
         "work_type": "SEDENTARY",
         "terrain_access": ["ASPHALT", "TRAIL"],
+        "weekly_volume_km": 60,
+        "double_sessions_ok": True,
+        "strength_sessions_per_week": 0,
+        "strength_setting": "HOME",
     }
     return data | overrides
 

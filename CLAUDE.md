@@ -18,6 +18,9 @@ docker-compose.yml   PostgreSQL 16 locale (prod: Supabase-compatibile)
 ```
 
 ### Comandi
+`.venv/bin/python -m scripts.recompute_metrics [--user <uuid>]` ricalcola `computed_metrics`
+dai `.fit` salvati dopo una modifica all'analisi deterministica.
+
 ```bash
 docker compose up -d db                                   # Postgres locale
 cd backend && python3.12 -m venv .venv && .venv/bin/pip install -e ".[dev]"
@@ -46,8 +49,53 @@ npm run build && npm run lint
 | `components/ui/`        | Primitive custom (Card, Pill, Metric, …). |
 | `components/brand/`     | Wordmark e identità. |
 | `components/charts/`    | Wrapper Recharts minimalisti. |
+| `components/plan/`, `components/shell/` | Viste per area (es. `PlanView`) e guscio (`AppShell`, `ThemeToggle`). |
 | `lib/`                  | Client API, formatter (passo, durata), utility. |
 | `types/`                | Tipi TS speculari agli schemi Pydantic. |
+
+### Frontend: regole di implementazione
+- **Tipi generati, mai scritti a mano**: `backend/.venv/bin/python -m scripts.export_openapi`
+  (da `backend/`) → `frontend/openapi.json` → `npm run gen:api` → `src/types/api.ts`. Rigenerare a
+  ogni modifica degli schemi Pydantic. Alias leggibili in `src/lib/types.ts`.
+- **Client API** `src/lib/api.ts` (`openapi-fetch`, tipizzato): unico punto di autenticazione
+  (`X-Dev-User-Id` da `NEXT_PUBLIC_DEV_USER_ID` fino al 5.6, poi token Supabase). `unwrap()`
+  converte gli errori in `ApiError(status)`.
+- **Dati utente lato client** con TanStack Query (`src/lib/queries.ts`, chiavi in `keys`); le
+  pagine sono gusci statici che montano una vista client (`components/<area>/<Area>View.tsx`).
+- **Cache Components**: niente `new Date()` durante il prerender. La data di oggi si legge con
+  `useToday()` (`src/lib/hooks.ts`, `null` sul server → stato di caricamento). Formattazione
+  date/numeri solo in `src/lib/format.ts` (it-IT, Europe/Rome; mesi minuscoli,
+  `first-letter:uppercase` invece di `capitalize`).
+- **Tema**: scuro di default; script inline in `<head>` (`THEME_SCRIPT`) applica la scelta
+  salvata (`localStorage["bryt-theme"]`) prima del primo paint.
+- **Grafici** (Recharts): colori solo da token `--bryt-chart-*` (validati con il checker
+  dataviz contro le superfici; l'accento brand è troppo chiaro per le barre in dark mode);
+  barre ≤ 24 px con estremità arrotondate 4 px; griglia solo orizzontale, sottile; tooltip
+  flottante custom; legenda sempre presente con ≥ 2 serie; testi in colori testo, mai della
+  serie. **Mai due assi Y**: passo/FC/cadenza sono grafici impilati con cursore sincronizzato.
+- **Telemetria** (`lib/activity.ts`): passo levigato tramite la velocità (media mobile), asse
+  del passo invertito, dominio robusto (percentili 2-98) per ignorare soste e scatti; distanze
+  mancanti nei file (alcuni dispositivi) riportate in avanti, mai a 0. Le bande grigie sono i
+  tratti confrontati dall'analisi di divergenza (`computed_metrics.cadence_hr_divergence`).
+- `/activity/[id]` legge l'id con `useParams` sotto `<Suspense>` (rotta dinamica). Gli output
+  degli agent arrivano tipizzati dal report; feedback 👍/👎 (commento facoltativo sul 👎).
+- Componenti custom in `components/ui` (Button, Badge, Card, Pill, Metric, Modal su
+  `<dialog>`, SegmentedControl, States) e icone inline in `components/icons.tsx`.
+- **Upload dalla dashboard = una sola analisi**: upload con `analyze=false` → modale tag →
+  "Salva e analizza" (`PATCH /context`, avvia la pipeline) oppure "Salta" (`analyze?background=true`).
+  Chiudere la modale non avvia nulla (la card "Ultima analisi" offre "Analizza ora"). La sync
+  Intervals analizza subito (nessun tag). Il report (`GET /report`) espone gli output tipizzati
+  degli agent; il client fa polling solo dopo aver avviato lui la pipeline.
+- **Chat** (`/chat`): stateless lato backend; la conversazione vive nel client (`localStorage["bryt-chat"]`,
+  ultimi 40 messaggi inviati a ogni turno, vedi `lib/chat.ts`). La `proposed_adjustment` del coach è
+  una card "Applica al piano" (`POST /plans/adjust`) / "Non ora": mai applicata senza conferma.
+  Risposte in testo semplice (niente markdown, regola nel prompt).
+  Guardrail costi: `CHAT_DAILY_LIMIT` risposte riuscite per giorno locale (oltre → 429 senza chiamare
+  l'LLM); tutto lo shared state è nel prefisso in cache, quindi i turni successivi lo rileggono.
+- Errori: "nessun piano" solo su 404; ogni altro errore (anche backend irraggiungibile) mostra
+  `ErrorState` con "Riprova".
+- Verifica visiva: build di produzione + screenshot (desktop e viewport mobile emulato via
+  Chrome DevTools Protocol: Chrome headless ha una larghezza minima di finestra).
 
 > **Next.js 16**: API e convenzioni differiscono dalle versioni precedenti. Prima di usare API
 > Next.js, consultare `frontend/node_modules/next/dist/docs/` (vedi `frontend/AGENTS.md`).
@@ -76,7 +124,7 @@ npm run build && npm run lint
 | Tabella | Note |
 |---------|------|
 | `users` | `id` = UUID di **Supabase Auth** (`auth.users.id`), mai generato dal backend |
-| `user_lifestyle_profiles` | 1:1 con user (`UNIQUE user_id`). API key Intervals solo in `intervals_api_key_encrypted` |
+| `user_lifestyle_profiles` | 1:1 con user (`UNIQUE user_id`). Volume abituale (obbligatorio) e di picco, forza (`strength_sessions_per_week` + `strength_setting` NONE/HOME/GYM), `double_sessions_ok`, `long_run_day`, `hr_sensor`, `injury_notes`, `coach_notes` (testo libero letto dagli agent). API key Intervals solo in `intervals_api_key_encrypted` |
 | `personal_bests` | una riga per PB (storico): la calibrazione pesa i PB **recenti** |
 | `training_plans` | `GENERATING`→`ACTIVE` (o `FAILED` + `generation_error`); `blocks` JSONB = `list[PlanBlock]`; `last_refined_on` |
 | `workouts` | `PLANNED`/`COMPLETED`/`MODIFIED`; `detail_level` `CONFIRMED`/`PROVISIONAL`; `is_key_session`; `structure` JSONB = `list[WorkoutStep]`; `original_snapshot` = prima versione |
@@ -133,7 +181,8 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
 | Metodo | Path | Step |
 |--------|------|------|
 | GET  | `/api/v1/health` | 1 ✅ |
-| GET  | `/api/v1/me`, `/api/v1/me/profile` | 3 ✅ |
+| GET  | `/api/v1/me`, `/api/v1/me/profile`, `/api/v1/me/calibration` (zone) | 3-4 ✅ |
+| PATCH | `/api/v1/me/profile` (modifica parziale, pagina impostazioni) | 4 ✅ |
 | PUT  | `/api/v1/me/onboarding` (profilo + PB + credenziali Intervals verificate live) | 3 ✅ |
 | POST | `/api/v1/integrations/intervals/sync` | 3 ✅ |
 | POST | `/api/v1/integrations/intervals/webhook` (pubblico, autenticato dal `secret`) | 3 ✅ |
@@ -145,9 +194,11 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
 | GET  | `/api/v1/workouts/{id}/history` (perché una sessione è cambiata) | 4 ✅ |
 | POST | `/api/v1/plans/adjust` (conferma la proposta della chat) | 4 ✅ |
 | POST | `/api/v1/chat` (stateless: il client invia la conversazione) | 4 ✅ |
+| GET  | `/api/v1/chat/quota` (messaggi rimasti oggi; `CHAT_DAILY_LIMIT`, default 15) | 5 ✅ |
 | GET  | `/api/v1/activities`, `/{id}`, `/{id}/streams`, `/{id}/report` | 4 ✅ |
 | PATCH | `/api/v1/activities/{id}/context` (tag → rilancia la pipeline) | 4 ✅ |
-| POST | `/api/v1/activities/{id}/analyze` (pipeline sincrona) | 4 ✅ |
+| POST | `/api/v1/activities/{id}/analyze` (sincrona; `?background=true` → 202 + polling del report) | 4-5 ✅ |
+| POST | `/api/v1/activities/upload-fit?analyze=false` (la dashboard raccoglie prima i tag) | 5 ✅ |
 | POST | `/api/v1/agent-runs/{id}/feedback` (👍/👎) | 4 ✅ |
 
 ### Implementazione agent (`app/agents/`)
@@ -159,13 +210,22 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
 - `runner.py`: unico punto di chiamata. Ogni esecuzione → riga `AgentExecutionLog` (anche in
   errore). Validator deterministici di dominio (giorni disponibili, zone esistenti, finestra
   date, id dei workout, alert di breakdown coerente) → **un** retry con le violazioni come feedback.
-- `prompts.py`: system prompt statici (cacheabili); dati variabili solo nel turno utente
-  (`<context>` JSON con chiavi ordinate). Testo per l'atleta in italiano.
+- `prompts.py`: system prompt statici. Testo per l'atleta in italiano.
+- **Cache**: il turno utente ha due blocchi: `<athlete_context>` stabile (profilo, PB, zone;
+  per i blocchi del piano anche lo scheletro) con breakpoint `cache_control`, poi task +
+  `<context>` variabile. Chiamate della stessa esecuzione rileggono il prefisso. JSON con
+  chiavi ordinate (byte-identico). Nel log: `input_tokens`, `cache_creation_input_tokens`,
+  `cache_read_input_tokens`, `output_tokens` (prezzi diversi).
 - `context.py`: viste read-only dello shared state (mai la API key Intervals).
 - `pipeline.py`: cascata post-attività con `pipeline_run_id` condiviso. Lanciata in
   background (`get_pipeline_launcher`, disattivabile con `AGENTS_ENABLED=false`) dopo upload,
   sync Intervals, webhook e aggiornamento dei tag.
-- Effort: piano `high`; analisi, adattamento, nutrizione `medium`; chat `low`.
+- Effort: scheletro e refinement `high`; blocchi, analisi, adattamento, nutrizione `medium`;
+  chat `low`.
+- Regole calendario (validator): giorni disponibili per le corse (la forza `STRENGTH` è
+  esente e non conta come corsa); max 1 corsa al giorno, 2 (AM/PM) solo con
+  `double_sessions_ok`; **max 2 sessioni chiave a settimana** (solo lunghi, passo gara,
+  test, gare: la doppia soglia non è mai chiave).
 - **Piano a orizzonte completo** (`training_periodization.py`):
   1. generazione in background: fase 1 *scheletro* (blocchi contigui fino al giorno gara, volume
      target per settimana), fase 2 *un blocco alla volta* con **ogni giorno** (REST espliciti),
@@ -185,11 +245,15 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
 - Test: `tests/agent_fakes.FakeLLM` (nessuna chiamata di rete nei test).
 
 ### Servizi deterministici di contesto
-- `services/calibration.py`: soglia ≈ passo sostenibile 60' dai PB (Riegel, esponente 1.06;
-  preferiti PB piani ≤ 12 mesi). Zone Friel (% FC soglia / % passo soglia) + zona `DT`
+- `services/calibration.py`: soglia ≈ passo sostenibile 60' dai PB (Riegel, esponente 1.06).
+  PB vecchi **penalizzati, non scartati**: +0,4% sul passo per mese oltre i 6 (max +8%);
+  vince la stima migliore (le maratone limitate dal cedimento muscolare sottostimano il
+  motore aerobico). `confidence` HIGH (≤ 6 mesi) / MEDIUM (≤ 12) / LOW → il piano inserisce
+  presto un test di ricalibrazione. Esposta da `GET /me/calibration`. Zone Friel (% FC soglia / % passo soglia) + zona `DT`
   (double threshold, sotto LT2). FC soglia stimata al 90% della FC max se assente.
 - `services/history.py`: baseline 28 giorni (volume, passo, cadenza, superfici, rapporto
-  acuto:cronico) e `elevation_quality` (totali del dispositivo vs dislivello ricalcolato dalla
+  acuto:cronico). `data_coverage` LOW (< 8 corse o km registrati < 50% del dichiarato) →
+  `effective_weekly_km` = volume dichiarato e rapporto acuto:cronico non calcolato e `elevation_quality` (totali del dispositivo vs dislivello ricalcolato dalla
   serie: se incoerenti → altitudine non affidabile, es. GPS senza barometro).
 
 ### Autenticazione (`app/core/auth.py`, `app/api/deps.py`)
@@ -249,8 +313,13 @@ La cadenza FIT di corsa è in passi per gamba (strides/min): convertita in **spm
    - campioni in movimento (≥ 1 m/s), valutazione solo oltre 20' di moving time;
    - baseline = 10-50% del moving time (salta il riscaldamento), finale = ultimo 20%;
    - sessioni variabili (CV velocità > 0.15, ripetute) → confronto solo sui campioni "work";
-   - `mechanical_breakdown` = (calo cadenza > 4 spm **o** GCT +4%) **e** FC stabile (±3%)
-     oppure, se fornita, FC finale dentro la zona target dell'atleta;
+   - `mechanical_breakdown` = (calo cadenza > 4 spm **o** GCT +4% **o** lunghezza del passo
+     -8%) **e** FC stabile (±3%) oppure, se fornita, FC finale dentro la zona target.
+     La lunghezza del passo (velocità / cadenza) cattura chi mantiene la cadenza ma perde
+     propulsione (caso reale: NYC Marathon, passo 1,28 → 1,05 m con cadenza e FC piatte) e
+     funziona anche su orologi senza running dynamics;
+   - FC stabile/in calo con forte perdita di passo = affaticamento periferico, non deriva
+     cardiaca (anche se l'aerobic decoupling risulta alto);
    - calcolato anche l'aerobic decoupling (Pa:Hr) per distinguere la deriva cardiaca.
 4. **Anomalie contestuali**: incrociare FC anomala a passo lento con jet lag/viaggi, caffeina
    pre-corsa, qualità del sonno → evitare falsi allarmi di calo di forma.
@@ -308,6 +377,9 @@ Gli accenti sono **semantici**: non usarli per decorazione o fuori dal loro domi
 ---
 
 ## 8. Processo di sviluppo
+
+Backlog concordato con l'utente: `TODO.md` (da implementare dopo lo Step 5).
+
 
 Sviluppo in 5 step sequenziali, con conferma esplicita dell'utente tra uno step e l'altro:
 

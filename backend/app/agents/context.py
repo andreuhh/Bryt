@@ -14,6 +14,7 @@ from app.models import (
     PersonalBest,
     TrainingPlan,
     User,
+    UserLifestyleProfile,
     Workout,
 )
 from app.models.enums import PlanStatus, WorkoutStatus
@@ -131,8 +132,17 @@ async def activity_context(session: AsyncSession, activity: Activity) -> dict[st
     stream = (
         await session.exec(select(ActivityStream).where(ActivityStream.activity_id == activity.id))
     ).first()
+    profile = (
+        await session.exec(
+            select(UserLifestyleProfile).where(UserLifestyleProfile.user_id == activity.user_id)
+        )
+    ).first()
     baseline = await training_baseline(
-        session, activity.user_id, activity.start_time, exclude_activity_id=activity.id
+        session,
+        activity.user_id,
+        activity.start_time,
+        exclude_activity_id=activity.id,
+        declared_weekly_km=profile.weekly_volume_km if profile else None,
     )
     return {
         "activity": dump_activity(activity),

@@ -35,7 +35,10 @@ class AgentExecutionLog(IdMixin, TimestampMixin, TenantMixin, table=True):
     error: str | None = None
 
     model: str = Field(max_length=64)
+    # Billed separately: uncached input, cache writes (~1.25x), cache reads (~0.1x), output
     input_tokens: int | None = Field(default=None, ge=0)
+    cache_creation_input_tokens: int | None = Field(default=None, ge=0)
+    cache_read_input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
     latency_ms: int | None = Field(default=None, ge=0)
 

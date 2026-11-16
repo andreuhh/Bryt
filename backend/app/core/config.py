@@ -33,6 +33,8 @@ class Settings(BaseSettings):
     # Weekly refinement scheduler (Sunday evening, athlete's local time)
     scheduler_enabled: bool = True
     scheduler_interval_s: int = 1800
+    # Coach chat: messages per athlete per local day (cost guardrail, checked before the LLM)
+    chat_daily_limit: int = 15
 
     # Intervals.icu
     intervals_base_url: str = "https://intervals.icu/api/v1"

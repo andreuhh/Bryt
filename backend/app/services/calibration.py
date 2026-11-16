@@ -4,24 +4,28 @@ Nothing here is an absolute pace or HR: every number is a ratio applied to the a
 threshold pace (estimated from recent PBs) and threshold HR.
 
 - Threshold pace ≈ pace sustainable for ~60 minutes, projected from each PB with Riegel's
-  formula T2 = T1 · (D2/D1)^1.06. Recent (≤ 12 months) flat PBs are preferred.
+  formula T2 = T1 · (D2/D1)^1.06. Older PBs are not discarded but penalized: +0.4% pace per
+  month beyond 6 months (max +8%). Marathons alone underestimate athletes whose limit is
+  muscular endurance, so a fast but older 10k can still be the best estimate.
 - Zones follow Joe Friel's run zones (% of threshold HR / % of threshold pace), plus a
   'DT' zone for Norwegian double-threshold sessions (controlled, below LT2).
 """
 
 from collections.abc import Sequence
 from dataclasses import dataclass
-from datetime import date, timedelta
+from datetime import date
 
 from app.models import PersonalBest, UserLifestyleProfile
-from app.models.enums import Surface
+from app.models.enums import CalibrationConfidence, Surface
 from app.schemas.common import HrRange, PaceRange
 from app.schemas.training import AthleteCalibration, TrainingZone
 
 RIEGEL_EXPONENT = 1.06
 THRESHOLD_DURATION_S = 3600
 MIN_PB_DISTANCE_M = 1500  # Riegel is unreliable for sprints
-PB_RECENCY = timedelta(days=365)
+AGE_GRACE_MONTHS = 6
+AGE_PENALTY_PER_MONTH = 0.004
+AGE_PENALTY_MAX = 0.08
 FLAT_SURFACES = {Surface.ASPHALT, Surface.TRACK, Surface.TREADMILL}
 LTHR_FROM_MAX_HR = 0.90  # fallback estimate when threshold HR is unknown
 
@@ -50,32 +54,44 @@ def riegel_threshold_pace(pb: PersonalBest) -> float:
     return float(THRESHOLD_DURATION_S / (distance_60 / 1000))
 
 
-def _usable_pbs(pbs: Sequence[PersonalBest], today: date) -> tuple[list[PersonalBest], str]:
-    candidates = [pb for pb in pbs if pb.distance_m >= MIN_PB_DISTANCE_M]
-    flat = [pb for pb in candidates if pb.surface in FLAT_SURFACES]
-    recent_flat = [pb for pb in flat if today - pb.achieved_on <= PB_RECENCY]
-    for group, note in (
-        (recent_flat, "PB su strada/pista degli ultimi 12 mesi"),
-        (flat, "PB su strada/pista più vecchi di 12 mesi: forma attuale incerta"),
-        (candidates, "solo PB su terreni non piani: stima meno precisa"),
-    ):
-        if group:
-            return group, note
-    return [], "nessun PB utilizzabile (≥ 1500 m)"
+def age_adjusted_threshold_pace(pb: PersonalBest, today: date) -> float:
+    months = (today - pb.achieved_on).days / 30.44
+    penalty = min(max(months - AGE_GRACE_MONTHS, 0) * AGE_PENALTY_PER_MONTH, AGE_PENALTY_MAX)
+    return riegel_threshold_pace(pb) * (1 + penalty)
+
+
+def _confidence(pb: PersonalBest, today: date, flat: bool) -> CalibrationConfidence:
+    months = (today - pb.achieved_on).days / 30.44
+    if not flat or months > 12:
+        return CalibrationConfidence.LOW
+    return (
+        CalibrationConfidence.HIGH if months <= AGE_GRACE_MONTHS else CalibrationConfidence.MEDIUM
+    )
 
 
 def compute_calibration(
     profile: UserLifestyleProfile, pbs: Sequence[PersonalBest], today: date
 ) -> AthleteCalibration:
-    usable, pb_note = _usable_pbs(pbs, today)
+    candidates = [pb for pb in pbs if pb.distance_m >= MIN_PB_DISTANCE_M]
+    flat = [pb for pb in candidates if pb.surface in FLAT_SURFACES]
+    usable = flat or candidates
     threshold_pace: float | None = None
-    source = pb_note
+    confidence = CalibrationConfidence.LOW
+    source = "nessun PB utilizzabile (≥ 1500 m)"
     if usable:
-        best = min(usable, key=riegel_threshold_pace)
-        threshold_pace = riegel_threshold_pace(best)
+        best = min(usable, key=lambda pb: age_adjusted_threshold_pace(pb, today))
+        threshold_pace = age_adjusted_threshold_pace(best, today)
+        confidence = _confidence(best, today, flat=bool(flat))
+        months = (today - best.achieved_on).days / 30.44
         source = (
-            f"{pb_note}; riferimento {best.distance_m} m in {best.time_s} s "
-            f"({best.achieved_on.isoformat()}) proiettato a 60' (Riegel)"
+            f"riferimento {best.distance_m} m in {best.time_s} s ({best.achieved_on.isoformat()}, "
+            f"{months:.0f} mesi fa) proiettato a 60' (Riegel)"
+            + (
+                f", penalità età +{(threshold_pace / riegel_threshold_pace(best) - 1):.1%}"
+                if threshold_pace > riegel_threshold_pace(best)
+                else ""
+            )
+            + ("" if flat else "; solo PB su terreni non piani: stima meno precisa")
         )
 
     threshold_hr = profile.threshold_hr
@@ -105,6 +121,7 @@ def compute_calibration(
         for z in ZONES
     ]
     return AthleteCalibration(
+        confidence=confidence,
         threshold_pace_s_per_km=round(threshold_pace, 1) if threshold_pace else None,
         threshold_hr=threshold_hr,
         zones=zones,

@@ -28,7 +28,7 @@ async def recommend(
     today = local_today(user)
     ctx, _ = await athlete_context(session, user, today)
     plan = await plan_context(session, user.id, today, NEXT_DAYS)
-    ctx |= {
+    variable = {
         "activity": dump_activity(activity),
         "mechanical_load_analysis": mechanical.model_dump(mode="json"),
         "plan_adjustment": adjustment.model_dump(mode="json") if adjustment else None,
@@ -43,7 +43,8 @@ async def recommend(
         run_id=run_id,
         system=prompts.NUTRITION_RECOVERY,
         task="Produce the nutrition and recovery protocols for the next 24-48 hours.",
-        context=ctx,
+        context=variable,
+        stable_context=ctx,
         output_model=NutritionRecoveryOutput,
         effort="medium",
         max_tokens=16000,

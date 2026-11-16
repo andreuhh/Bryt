@@ -14,7 +14,7 @@ from zoneinfo import ZoneInfo
 
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.agents.context import MissingProfileError
+from app.agents.context import MissingProfileError, local_today
 from app.agents.llm import AgentError, LLMClient, get_llm
 from app.agents.mechanical_load import analyze_activity
 from app.agents.nutrition_recovery import recommend
@@ -24,6 +24,7 @@ from app.core.database import SessionFactory
 from app.models import Activity, User
 from app.models.enums import AgentTrigger
 from app.schemas.agents import MechanicalLoadOutput, NutritionRecoveryOutput, PlanAdjustmentOutput
+from app.services.workouts import revert_activity_adjustments
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,10 @@ async def run_post_activity_pipeline(
     except (AgentError, MissingProfileError) as exc:
         result.errors.append(f"mechanical_load: {exc}")
         return result  # nothing downstream makes sense without the analysis
+
+    # A re-analysis replaces the previous one: undo its plan changes before deciding again
+    await revert_activity_adjustments(session, activity.id, local_today(user))
+    await session.commit()
 
     request = result.mechanical.adjustment_request
     if result.mechanical.plan_adjustment_needed and request is not None:

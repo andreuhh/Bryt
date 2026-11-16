@@ -7,8 +7,14 @@ from typing import Any
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from app.models import Workout, WorkoutRevision
-from app.models.enums import RevisionSource, RevisionStatus, WorkoutDetail, WorkoutStatus
+from app.models import AgentExecutionLog, Workout, WorkoutRevision
+from app.models.enums import (
+    AgentName,
+    RevisionSource,
+    RevisionStatus,
+    WorkoutDetail,
+    WorkoutStatus,
+)
 from app.schemas.training import WorkoutDraft
 
 CONFIRM_DAYS = 14  # rolling window of fully detailed workouts
@@ -210,3 +216,61 @@ async def history(session: AsyncSession, workout_id: uuid.UUID) -> list[WorkoutR
         .order_by(col(WorkoutRevision.created_at))
     )
     return list((await session.exec(stmt)).all())
+
+
+async def revert_activity_adjustments(
+    session: AsyncSession, activity_id: uuid.UUID, today: date
+) -> list[Workout]:
+    """Undo the plan changes of previous analyses of the same activity.
+
+    Re-analysis (e.g. after editing the context tags) must decide from the original plan,
+    not stack a new reduction on top of the previous one. Past or completed workouts are
+    left untouched. Reverted revisions become SUPERSEDED (history is kept).
+    """
+    run_ids = select(AgentExecutionLog.id).where(
+        AgentExecutionLog.activity_id == activity_id,
+        AgentExecutionLog.agent_name == AgentName.TRAINING_PERIODIZATION,
+    )
+    stmt = (
+        select(WorkoutRevision)
+        .where(
+            col(WorkoutRevision.agent_run_id).in_(run_ids),
+            WorkoutRevision.status == RevisionStatus.APPLIED,
+            WorkoutRevision.source == RevisionSource.POST_ACTIVITY,
+        )
+        .order_by(col(WorkoutRevision.created_at))
+    )
+    by_workout: dict[uuid.UUID, list[WorkoutRevision]] = {}
+    for rev in (await session.exec(stmt)).all():
+        by_workout.setdefault(rev.workout_id, []).append(rev)
+
+    now = datetime.now(UTC)
+    reverted: list[Workout] = []
+    for workout_id, revisions in by_workout.items():
+        workout = await session.get(Workout, workout_id)
+        if workout is None or workout.status == WorkoutStatus.COMPLETED:
+            continue
+        if workout.scheduled_date < today:
+            continue
+        first = revisions[0]
+        if first.before is not None:
+            _copy(workout, WorkoutDraft.model_validate(first.before))
+            workout.detail_level = detail_for(workout.scheduled_date, today)
+        for rev in revisions:
+            rev.status, rev.resolved_at = RevisionStatus.SUPERSEDED, now
+            session.add(rev)
+        others = [
+            r
+            for r in await history(session, workout_id)
+            if r.status == RevisionStatus.APPLIED and r.id not in {x.id for x in revisions}
+        ]
+        if others:
+            workout.modification_reason = others[-1].reason
+        else:
+            workout.status = WorkoutStatus.PLANNED
+            workout.original_snapshot = None
+            workout.modification_reason = None
+        session.add(workout)
+        reverted.append(workout)
+    await session.flush()
+    return reverted

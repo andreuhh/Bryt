@@ -1,5 +1,9 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Inter, Plus_Jakarta_Sans } from "next/font/google";
+
+import { THEME_SCRIPT } from "@/components/shell/ThemeToggle";
+
+import { Providers } from "./providers";
 import "./globals.css";
 
 const inter = Inter({
@@ -17,14 +21,24 @@ export const metadata: Metadata = {
   description: "Endurance load, mechanics & recovery intelligence.",
 };
 
+export const viewport: Viewport = {
+  themeColor: "#090a0c",
+};
+
 export default function RootLayout({ children }: LayoutProps<"/">) {
   return (
     <html
       lang="it"
       data-theme="dark"
+      suppressHydrationWarning
       className={`${inter.variable} ${jakarta.variable} h-full antialiased`}
     >
-      <body className="min-h-full flex flex-col bg-canvas text-fg">{children}</body>
+      <head>
+        <script dangerouslySetInnerHTML={{ __html: THEME_SCRIPT }} />
+      </head>
+      <body className="min-h-full bg-canvas text-fg">
+        <Providers>{children}</Providers>
+      </body>
     </html>
   );
 }

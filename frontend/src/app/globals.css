@@ -32,6 +32,16 @@
   --bryt-accent-nutrition: #3b82f6; /* carbs, protein, recovery */
   --bryt-on-accent: #090a0c;
 
+  /* Chart marks (validated with the dataviz palette checker against --bryt-surface):
+     the brand accent is too light for filled marks in dark mode, so charts use a
+     darker step of the same hue. Planned/reference marks stay neutral. */
+  --bryt-chart-pace: #00b077;
+  --bryt-chart-hr: #f0573a;
+  --bryt-chart-cadence: #9aa0ab;
+  --bryt-chart-reference: rgba(255, 255, 255, 0.14);
+  --bryt-chart-reference-soft: rgba(255, 255, 255, 0.07);
+  --bryt-chart-grid: rgba(255, 255, 255, 0.06);
+
   /* Radii */
   --bryt-radius-container: 1.5rem; /* rounded-3xl */
   --bryt-radius-card: 1rem; /* rounded-2xl */
@@ -57,6 +67,13 @@
   --bryt-accent-load: #f04a24;
   --bryt-accent-nutrition: #2563eb;
   --bryt-on-accent: #ffffff;
+
+  --bryt-chart-pace: #00996a;
+  --bryt-chart-hr: #d9452a;
+  --bryt-chart-cadence: #5d636e;
+  --bryt-chart-reference: rgba(9, 10, 12, 0.14);
+  --bryt-chart-reference-soft: rgba(9, 10, 12, 0.07);
+  --bryt-chart-grid: rgba(9, 10, 12, 0.07);
 }
 
 /* ==========================================================================

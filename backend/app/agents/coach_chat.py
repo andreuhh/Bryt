@@ -1,32 +1,63 @@
 """BRYT Coach: conversational access to the shared state.
 
-Proposes plan changes, never applies them (the athlete confirms via POST /plans/adjust)."""
+Proposes plan changes, never applies them (the athlete confirms via POST /plans/adjust).
+Cost guardrails: a daily message quota checked before any LLM call, and the whole shared-state
+context sent as the cached prefix, so follow-up turns of a conversation re-read it from cache."""
 
 import uuid
 from collections.abc import Sequence
+from datetime import datetime, time
+from zoneinfo import ZoneInfo
 
-from sqlmodel import col, select
+from sqlmodel import col, func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.agents import prompts
 from app.agents.context import athlete_context, dump_activity, local_today, plan_context
-from app.agents.llm import LLMClient
+from app.agents.llm import AgentError, LLMClient
 from app.agents.runner import run_agent
+from app.core.config import get_settings
 from app.models import Activity, AgentExecutionLog, User
 from app.models.enums import AgentName, AgentRunStatus, AgentTrigger
 from app.schemas.agents import CoachChatOutput
-from app.schemas.coach import ChatMessage
+from app.schemas.coach import ChatMessage, ChatQuota
 
 RECENT_ACTIVITIES = 5
 PLAN_DAYS = 14
 
 
+class ChatQuotaExceededError(AgentError):
+    """Daily message quota used up: no LLM call is made."""
+
+
+async def chat_quota(session: AsyncSession, user: User) -> ChatQuota:
+    """Successful coach replies since local midnight (failed calls don't count)."""
+    tz = ZoneInfo(user.timezone)
+    midnight = datetime.combine(local_today(user), time.min, tzinfo=tz)
+    used = (
+        await session.exec(
+            select(func.count())
+            .select_from(AgentExecutionLog)
+            .where(
+                AgentExecutionLog.user_id == user.id,
+                AgentExecutionLog.agent_name == AgentName.COACH_CHAT,
+                AgentExecutionLog.status == AgentRunStatus.SUCCESS,
+                col(AgentExecutionLog.created_at) >= midnight,
+            )
+        )
+    ).one()
+    limit = get_settings().chat_daily_limit
+    return ChatQuota(limit=limit, used=used, remaining=max(limit - used, 0))
+
+
 async def chat(
     session: AsyncSession, llm: LLMClient, user: User, messages: Sequence[ChatMessage]
 ) -> tuple[CoachChatOutput, AgentExecutionLog]:
+    if (await chat_quota(session, user)).remaining == 0:
+        raise ChatQuotaExceededError("Daily coach message limit reached")
     today = local_today(user)
     ctx, _ = await athlete_context(session, user, today)
-    ctx |= await plan_context(session, user.id, today, PLAN_DAYS)
+    variable = await plan_context(session, user.id, today, PLAN_DAYS)
 
     recent = list(
         (
@@ -56,7 +87,7 @@ async def chat(
         ).all()
         if log.output
     }
-    ctx["recent_activities"] = [
+    variable["recent_activities"] = [
         dump_activity(a) | {"latest_analysis_summary": (analyses.get(a.id) or {}).get("summary")}
         for a in recent
     ]
@@ -73,7 +104,10 @@ async def chat(
         run_id=uuid.uuid4(),
         system=prompts.COACH_CHAT,
         task=f"Conversation so far:\n{transcript}\n\nReply to the athlete's last message.",
-        context=ctx,
+        # Everything but the transcript is the cached prefix: it doesn't change between the
+        # turns of a conversation (same day, no new activity), so turn 2+ read it from cache.
+        context={},
+        stable_context=ctx | variable,
         output_model=CoachChatOutput,
         effort="low",
         max_tokens=8000,

@@ -8,10 +8,13 @@ from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models import Activity, ActivityStream
+from app.models.enums import DataCoverage
 from app.schemas.context import ElevationQuality, TrainingBaseline
 from app.services.fit_parser import elevation_gain_loss
 
 BASELINE_DAYS = 28
+MIN_ACTIVITIES_FOR_COVERAGE = 8
+MIN_DECLARED_RATIO = 0.5  # recorded km below half of the declared volume → LOW coverage
 
 
 async def training_baseline(
@@ -19,7 +22,10 @@ async def training_baseline(
     user_id: uuid.UUID,
     before: datetime,
     exclude_activity_id: uuid.UUID | None = None,
+    declared_weekly_km: float | None = None,
 ) -> TrainingBaseline:
+    """28-day history. With sparse recordings (new user, no Intervals sync yet) the declared
+    weekly volume is the reference and the acute:chronic ratio is withheld (meaningless)."""
     since = before - timedelta(days=BASELINE_DAYS)
     stmt = select(Activity).where(
         Activity.user_id == user_id,
@@ -41,13 +47,24 @@ async def training_baseline(
     for a in acts:
         by_surface[a.surface.value if a.surface else "UNKNOWN"] += a.distance_m / 1000
 
+    sparse = len(acts) < MIN_ACTIVITIES_FOR_COVERAGE or (
+        declared_weekly_km is not None and chronic_weekly < MIN_DECLARED_RATIO * declared_weekly_km
+    )
+    coverage = DataCoverage.LOW if sparse else DataCoverage.HIGH
+    effective = declared_weekly_km if sparse and declared_weekly_km else chronic_weekly
+
     return TrainingBaseline(
         window_days=BASELINE_DAYS,
+        data_coverage=coverage,
+        declared_weekly_km=declared_weekly_km,
+        effective_weekly_km=round(effective, 1),
         activities=len(acts),
         total_km=round(total_km, 1),
         weekly_avg_km=round(chronic_weekly, 1),
         acute_7d_km=round(acute_km, 1),
-        acute_chronic_ratio=round(acute_km / chronic_weekly, 2) if chronic_weekly else None,
+        acute_chronic_ratio=round(acute_km / chronic_weekly, 2)
+        if chronic_weekly and not sparse
+        else None,
         avg_pace_s_per_km=round(
             sum((a.avg_pace_s_per_km or 0) * a.distance_m / 1000 for a in paced) / paced_km, 1
         )

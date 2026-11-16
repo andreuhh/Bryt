@@ -1,5 +1,7 @@
 import uuid
-from typing import Annotated
+from datetime import date, datetime, time, timedelta
+from typing import Annotated, TypeVar
+from zoneinfo import ZoneInfo
 
 from fastapi import (
     APIRouter,
@@ -12,6 +14,7 @@ from fastapi import (
     UploadFile,
     status,
 )
+from pydantic import ValidationError
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -22,7 +25,13 @@ from app.core.config import get_settings
 from app.models import Activity, ActivityStream, AgentExecutionLog, User
 from app.models.enums import ActivitySource, AgentName, AgentTrigger
 from app.schemas.activity import ActivityContextUpdate, ActivityRead, ActivityStreamRead
-from app.schemas.agent_log import ActivityReport, AgentExecutionLogRead
+from app.schemas.agent_log import (
+    ActivityReport,
+    AgentExecutionLogRead,
+    MechanicalLoadRun,
+    NutritionRecoveryRun,
+    PlanAdjustmentRun,
+)
 from app.schemas.ingestion import UploadFitResult
 from app.services.fit_files import InvalidFitFileError, extract_fit_bytes
 from app.services.fit_parser import FitParseError, UnsupportedSportError
@@ -55,6 +64,12 @@ async def upload_fit(
     launch_pipeline: LauncherDep,
     storage: Annotated[FitStorage, Depends(get_fit_storage)],
     file: Annotated[UploadFile, File(description=".fit, .fit.gz or Garmin .zip export")],
+    analyze: Annotated[
+        bool,
+        Query(
+            description="false: the client collects context tags first, then starts the analysis"
+        ),
+    ] = True,
 ) -> UploadFitResult:
     max_bytes = get_settings().max_fit_upload_mb * 1024 * 1024
     raw = await file.read(max_bytes + 1)
@@ -75,9 +90,9 @@ async def upload_fit(
     except (InvalidFitFileError, FitParseError, UnsupportedSportError) as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
-    if result.created:
+    if result.created and analyze:
         background.add_task(launch_pipeline, user.id, result.activity.id)
-    else:
+    elif not result.created:
         response.status_code = status.HTTP_200_OK
     return UploadFitResult(
         created=result.created, activity=ActivityRead.model_validate(result.activity)
@@ -88,14 +103,20 @@ async def upload_fit(
 async def list_activities(
     user: CurrentUser,
     session: SessionDep,
-    limit: Annotated[int, Query(ge=1, le=100)] = 20,
+    start: Annotated[date | None, Query(alias="from")] = None,
+    end: Annotated[date | None, Query(alias="to")] = None,
+    limit: Annotated[int, Query(ge=1, le=500)] = 20,
 ) -> list[ActivityRead]:
-    stmt = (
-        select(Activity)
-        .where(Activity.user_id == user.id)
-        .order_by(col(Activity.start_time).desc())
-        .limit(limit)
-    )
+    """Most recent first. `from`/`to` are local dates (athlete's time zone), inclusive."""
+    tz = ZoneInfo(user.timezone)
+    stmt = select(Activity).where(Activity.user_id == user.id)
+    if start is not None:
+        stmt = stmt.where(col(Activity.start_time) >= datetime.combine(start, time.min, tz))
+    if end is not None:
+        stmt = stmt.where(
+            col(Activity.start_time) < datetime.combine(end + timedelta(days=1), time.min, tz)
+        )
+    stmt = stmt.order_by(col(Activity.start_time).desc()).limit(limit)
     return [ActivityRead.model_validate(a) for a in (await session.exec(stmt)).all()]
 
 
@@ -145,11 +166,20 @@ async def analyze_now(
     activity_id: uuid.UUID,
     user: CurrentUser,
     session: SessionDep,
+    response: Response,
+    background: BackgroundTasks,
+    launch_pipeline: LauncherDep,
     llm: Annotated[LLMClient, Depends(get_llm)],
+    run_in_background: Annotated[bool, Query(alias="background")] = False,
 ) -> ActivityReport:
-    """Runs the pipeline synchronously (debug / manual re-run) and returns the report."""
+    """Runs the agent pipeline. `background=true`: 202 now, poll GET /report (UI);
+    otherwise waits for the whole pipeline (debug)."""
     activity = await _owned(session, user, activity_id)
-    await run_post_activity_pipeline(session, llm, user, activity)
+    if run_in_background:
+        background.add_task(launch_pipeline, user.id, activity.id)
+        response.status_code = status.HTTP_202_ACCEPTED
+    else:
+        await run_post_activity_pipeline(session, llm, user, activity)
     return await read_report(activity_id, user, session)
 
 
@@ -177,14 +207,30 @@ async def read_report(
     run_id = logs[0].pipeline_run_id
     latest = {log.agent_name: log for log in reversed(logs) if log.pipeline_run_id == run_id}
 
-    def read(name: AgentName) -> AgentExecutionLogRead | None:
-        log = latest.get(name)
-        return AgentExecutionLogRead.model_validate(log) if log else None
-
     return ActivityReport(
         activity_id=activity_id,
         pipeline_run_id=run_id,
-        mechanical_load=read(AgentName.MECHANICAL_LOAD),
-        plan_adjustment=read(AgentName.TRAINING_PERIODIZATION),
-        nutrition_recovery=read(AgentName.NUTRITION_RECOVERY),
+        mechanical_load=_typed_run(latest.get(AgentName.MECHANICAL_LOAD), MechanicalLoadRun),
+        plan_adjustment=_typed_run(latest.get(AgentName.TRAINING_PERIODIZATION), PlanAdjustmentRun),
+        nutrition_recovery=_typed_run(
+            latest.get(AgentName.NUTRITION_RECOVERY), NutritionRecoveryRun
+        ),
     )
+
+
+RunT = TypeVar("RunT", MechanicalLoadRun, PlanAdjustmentRun, NutritionRecoveryRun)
+
+
+def _typed_run(log: AgentExecutionLog | None, model: type[RunT]) -> RunT | None:
+    """Outputs stored under an older schema degrade to output=None instead of failing."""
+    if log is None:
+        return None
+    data = AgentExecutionLogRead.model_validate(log).model_dump()
+    data.pop("agent_name"), data.pop("trigger"), data.pop("pipeline_run_id")
+    data.pop("activity_id"), data.pop("plan_id")
+    try:
+        return model.model_validate(data)
+    except ValidationError:
+        data["output"] = None
+        data["error"] = (data["error"] or "") + " [output not compatible with the current schema]"
+        return model.model_validate(data)

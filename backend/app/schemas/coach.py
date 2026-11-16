@@ -44,7 +44,14 @@ class ChatRequest(StrictModel):
     messages: list[ChatMessage] = Field(min_length=1, max_length=40)
 
 
+class ChatQuota(StrictModel):
+    limit: int
+    used: int
+    remaining: int
+
+
 class ChatResponse(StrictModel):
     reply: str
     proposed_adjustment: PlanAdjustmentRequest | None
     agent_run_id: uuid.UUID
+    quota: ChatQuota

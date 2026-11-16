@@ -3,7 +3,9 @@
 Extracts the time series (timestamp, pace, heart_rate, cadence, elevation, ground_contact_time)
 and computes the *Cadence vs HR Divergence*: in the final fraction of a long run / quality
 session, HR stable (or within the athlete's target zone) while cadence drops more than
-4 spm or ground contact time rises → mechanical (muscular) breakdown without cardiac drift.
+4 spm, ground contact time rises, or stride length collapses → mechanical (muscular)
+breakdown without cardiac drift. Stride length (speed / cadence) catches athletes who keep
+their cadence but lose propulsion, and works on watches without running dynamics.
 
 No athlete-specific pace/HR is hardcoded: the only physiological input is the optional
 `target_hr` range, derived upstream from the athlete's profile.
@@ -59,6 +61,7 @@ class DivergenceThresholds:
     cadence_drop_spm: float = 4.0  # spec: "oltre 4-5 passi/min"
     hr_stable_pct: float = 3.0
     ground_contact_rise_pct: float = 4.0
+    stride_length_drop_pct: float = 8.0
     min_moving_s: float = 20 * 60
     min_segment_samples: int = 30
     moving_speed_mps: float = 1.0
@@ -198,6 +201,7 @@ def analyze_cadence_hr_divergence(
     hr_change_pct = _pct(f.heart_rate, b.heart_rate)
     pace_change_pct = _pct(f.pace_s_per_km, b.pace_s_per_km)
     gct_change_pct = _pct(f.ground_contact_ms, b.ground_contact_ms)
+    stride_change_pct = _pct(f.stride_length_m, b.stride_length_m)
 
     hr_stable = abs(hr_change_pct) <= th.hr_stable_pct if hr_change_pct is not None else None
     hr_in_zone = (
@@ -207,6 +211,7 @@ def analyze_cadence_hr_divergence(
     )
     cadence_drop = cad_drop is not None and cad_drop > th.cadence_drop_spm
     gct_rise = gct_change_pct is not None and gct_change_pct >= th.ground_contact_rise_pct
+    stride_drop = stride_change_pct is not None and -stride_change_pct >= th.stride_length_drop_pct
     hr_ok = hr_in_zone if hr_in_zone is not None else bool(hr_stable)
 
     return CadenceHrDivergenceMetrics(
@@ -223,7 +228,9 @@ def analyze_cadence_hr_divergence(
         hr_in_target_zone=hr_in_zone,
         cadence_drop_detected=cadence_drop,
         ground_contact_rise_detected=gct_rise,
-        mechanical_breakdown=(cadence_drop or gct_rise) and hr_ok,
+        stride_length_change_pct=_round(stride_change_pct),
+        stride_length_drop_detected=stride_drop,
+        mechanical_breakdown=(cadence_drop or gct_rise or stride_drop) and hr_ok,
     )
 
 
@@ -341,6 +348,7 @@ def _segment_stats(seg: pd.DataFrame) -> SegmentStats:
         heart_rate=_round(_median(seg["heart_rate"])),
         pace_s_per_km=_round(_median(seg["pace"])),
         ground_contact_ms=_round(_median(seg["gct"])),
+        stride_length_m=_round(_median(seg["speed"] / (seg["cadence"] / 60)), 3),
     )
 
 

@@ -22,6 +22,8 @@ from app.models.enums import (
     AgentName,
     AgentRunStatus,
     AthleteBackground,
+    CalibrationConfidence,
+    DataCoverage,
     PlanStatus,
     RevisionSource,
     RevisionStatus,
@@ -97,18 +99,32 @@ def test_riegel_threshold_from_marathon() -> None:
 
 def test_calibration_prefers_recent_flat_pbs_and_builds_zones() -> None:
     pbs = [
-        _pb(10000, 2280, 900),  # old and faster: ignored while a recent one exists
+        _pb(10000, 2280, 900),  # faster but 30 months old: max age penalty (+8%)
         _pb(21097, 5070, 60),
         _pb(10000, 2100, 30, Surface.TRAIL),  # trail: ignored for pace
     ]
     cal = compute_calibration(_profile(), pbs, date(2026, 11, 15))
     assert cal.threshold_pace_s_per_km == pytest.approx(riegel_threshold_pace(pbs[1]), abs=0.1)
-    assert "ultimi 12 mesi" in cal.source_notes
+    assert cal.confidence == CalibrationConfidence.HIGH
     zones = {z.code: z for z in cal.zones}
     assert zones["Z4"].hr is not None and zones["Z4"].hr.max_bpm == round(172 * 0.99)
     # Easier zones are slower: Z2 slow bound > Z4 slow bound
     assert zones["Z2"].pace and zones["Z4"].pace
     assert zones["Z2"].pace.slow_s_per_km > zones["Z4"].pace.slow_s_per_km
+
+
+def test_calibration_keeps_older_fast_pb_with_age_penalty() -> None:
+    """Marathons limited by muscular fade must not hide an older, faster 10k."""
+    marathon = _pb(42195, 12070, 358)  # 3:21:10, within 12 months
+    ten_k = _pb(10000, 2280, 457)  # 38:00, 15 months old
+    cal = compute_calibration(_profile(), [marathon, ten_k], date(2026, 11, 15))
+    penalty = (457 / 30.44 - 6) * 0.004
+    assert cal.threshold_pace_s_per_km == pytest.approx(
+        riegel_threshold_pace(ten_k) * (1 + penalty), abs=0.2
+    )
+    assert cal.threshold_pace_s_per_km < riegel_threshold_pace(marathon)
+    assert cal.confidence == CalibrationConfidence.LOW
+    assert "penalità età" in cal.source_notes
 
 
 def test_calibration_estimates_threshold_hr_from_max() -> None:
@@ -591,6 +607,41 @@ async def test_chat_proposes_then_adjust_applies(
     assert week.status_code == 200 and week.json()
 
 
+async def test_chat_caches_shared_state_and_enforces_daily_quota(
+    api: tuple[httpx.AsyncClient, FakeLLM, list[tuple[uuid.UUID, uuid.UUID]]],
+    session: AsyncSession,
+    athlete: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.core.config import get_settings
+
+    client, llm, _ = api
+    await _active_plan_with_workouts(session, athlete)
+    monkeypatch.setattr(get_settings(), "chat_daily_limit", 2)
+    body = {"messages": [{"role": "user", "content": "Ciao"}]}
+
+    llm.queue(CoachChatOutput, AgentUnavailableError("down"))
+    assert (await client.post("/chat", headers=_h(athlete), json=body)).status_code == 503
+    quota = (await client.get("/chat/quota", headers=_h(athlete))).json()
+    assert quota == {"limit": 2, "used": 0, "remaining": 2}  # failed calls don't count
+
+    for remaining in (1, 0):
+        llm.queue(CoachChatOutput, chat_output(with_adjustment=False))
+        response = await client.post("/chat", headers=_h(athlete), json=body)
+        assert response.status_code == 200, response.text
+        assert response.json()["quota"]["remaining"] == remaining
+
+    # Plan and recent activities are in the cached prefix; only the transcript varies
+    prefix = llm.calls[-1].cached_prefix or ""
+    assert "upcoming_workouts" in prefix and "recent_activities" in prefix
+    assert "upcoming_workouts" not in llm.calls[-1].prompt
+
+    calls = len(llm.calls)
+    over = await client.post("/chat", headers=_h(athlete), json=body)
+    assert over.status_code == 429
+    assert len(llm.calls) == calls  # no LLM call once the quota is used up
+
+
 async def test_agent_unavailable_maps_to_503(
     api: tuple[httpx.AsyncClient, FakeLLM, list[tuple[uuid.UUID, uuid.UUID]]], athlete: User
 ) -> None:
@@ -804,3 +855,239 @@ async def test_post_activity_adjustment_is_recorded_in_history(
         revs[0].source == RevisionSource.POST_ACTIVITY and revs[0].status == RevisionStatus.APPLIED
     )
     assert revs[0].before and revs[0].before["title"] == "Workout +1"
+
+
+# --- Profile v2: coverage, key-session cap, double sessions, caching ----------------------
+
+
+async def test_baseline_uses_declared_volume_when_history_is_sparse(
+    session: AsyncSession, athlete: User, storage: LocalFitStorage
+) -> None:
+    from app.services.history import training_baseline
+
+    await _ingest_today(session, athlete, storage)  # a single recorded run
+    later = datetime.combine(local_today(athlete) + timedelta(days=1), time.min, tzinfo=UTC)
+    sparse = await training_baseline(session, athlete.id, later, declared_weekly_km=72)
+    assert sparse.data_coverage == DataCoverage.LOW
+    assert sparse.effective_weekly_km == 72
+    assert sparse.acute_chronic_ratio is None  # meaningless on sparse data
+
+    no_declared = await training_baseline(session, athlete.id, later)
+    assert no_declared.effective_weekly_km == no_declared.weekly_avg_km
+
+
+async def test_block_validator_caps_key_sessions_and_double_runs(
+    session: AsyncSession, athlete: User
+) -> None:
+    from app.agents.training_periodization import _block_violations
+    from app.schemas.training import PlanBlock
+
+    profile = (
+        await session.exec(
+            select(UserLifestyleProfile).where(UserLifestyleProfile.user_id == athlete.id)
+        )
+    ).one()
+    cal = compute_calibration(profile, [], local_today(athlete))
+    monday = date(2026, 11, 16)
+    block = PlanBlock.model_validate(
+        {
+            "name": "B",
+            "phase": "BASE",
+            "start_date": monday.isoformat(),
+            "end_date": (monday + timedelta(days=6)).isoformat(),
+            "objective": "x",
+            "weeks": [{"week_index": 1, "start_date": monday.isoformat(), "load_type": "LOAD"}],
+        }
+    )
+
+    def day(i: int, **kw: object) -> dict[str, object]:
+        base = {
+            "scheduled_date": (monday + timedelta(days=i)).isoformat(),
+            "workout_type": "EASY",
+            "title": f"d{i}",
+            "target_duration_s": 3000,
+        }
+        return base | kw
+
+    workouts = [day(i, is_key_session=True) for i in range(7)]  # 7 "key" sessions
+    workouts += [day(1, session_slot="PM", title="PM run")]  # double run on Tuesday
+    workouts += [day(2, workout_type="STRENGTH", title="Forza a casa")]  # strength: not a run
+    out = BlockWorkoutsOutput.model_validate({"workouts": workouts})
+    available = set(ALL_DAYS)
+
+    single = _block_violations(out, block, available, cal, double_ok=False)
+    assert any("key sessions" in v for v in single)
+    assert any("more than 1 run" in v for v in single)
+    assert not any(str(monday + timedelta(days=2)) in v and "run(s)" in v for v in single)
+
+    double = _block_violations(out, block, available, cal, double_ok=True)
+    assert not any("run(s) in a day" in v for v in double)
+
+
+async def test_patch_profile_and_onboarding_is_idempotent_on_pbs(
+    api: tuple[httpx.AsyncClient, FakeLLM, list[tuple[uuid.UUID, uuid.UUID]]],
+    session: AsyncSession,
+    athlete: User,
+) -> None:
+    client, _, _ = api
+    patched = await client.patch(
+        "/me/profile",
+        headers=_h(athlete),
+        json={
+            "weekly_volume_km": 72,
+            "peak_volume_km": 82,
+            "long_run_day": "SUN",
+            "strength_setting": "HOME",
+            "coach_notes": "NYC: quadricipiti induriti al km 25",
+        },
+    )
+    assert patched.status_code == 200, patched.text
+    body = patched.json()
+    assert body["weekly_volume_km"] == 72 and body["long_run_day"] == "SUN"
+    assert body["methodology"] == "TRADITIONAL"  # untouched fields keep their value
+
+    payload = {
+        "profile": profile_payload(),
+        "personal_bests": [{"distance_m": 10000, "time_s": 2280, "achieved_on": "2025-08-15"}],
+    }
+    for _ in range(2):
+        assert (
+            await client.put("/me/onboarding", headers=_h(athlete), json=payload)
+        ).status_code == 200
+    pbs = (await session.exec(select(PersonalBest).where(PersonalBest.user_id == athlete.id))).all()
+    assert len([pb for pb in pbs if pb.distance_m == 10000]) == 1
+
+
+async def test_block_calls_share_a_cached_prefix(session: AsyncSession, athlete: User) -> None:
+    plan = await start_plan_generation(session, athlete)
+    llm = _queue_full_plan(FakeLLM(), plan)
+    await build_plan(session, llm, athlete, plan)
+    blocks = llm.calls_for(BlockWorkoutsOutput)
+    assert blocks[0].cached_prefix and blocks[0].cached_prefix == blocks[1].cached_prefix
+    assert "skeleton" in blocks[0].cached_prefix
+    assert "current_block" not in blocks[0].cached_prefix  # the varying part stays out
+
+
+async def test_anthropic_llm_puts_cache_breakpoint_on_prefix() -> None:
+    from app.agents.llm import AnthropicLLM
+
+    fake = _FakeAnthropic(TypeError("Could not resolve authentication method"))
+    llm = AnthropicLLM(client=fake)  # type: ignore[arg-type]
+    with pytest.raises(AgentUnavailableError):
+        await llm.generate(
+            system="s",
+            prompt="variable",
+            output_model=CoachChatOutput,
+            effort="low",
+            max_tokens=100,
+            cached_prefix="stable",
+        )
+    content = fake.kwargs["messages"][0]["content"]  # type: ignore[index]
+    assert content[0] == {"type": "text", "text": "stable", "cache_control": {"type": "ephemeral"}}
+    assert content[1] == {"type": "text", "text": "variable"}
+    assert "cache_control" not in fake.kwargs
+
+
+# --- Re-analysis does not stack plan adjustments ------------------------------------------
+
+
+async def test_reanalysis_replaces_previous_adjustment(
+    session: AsyncSession, athlete: User, storage: LocalFitStorage
+) -> None:
+    from app.services.workouts import history
+
+    workouts = await _active_plan_with_workouts(session, athlete)
+    activity = await _ingest_today(session, athlete, storage, final_cadence_drop=6)
+
+    def run_llm(adjust: bool) -> FakeLLM:
+        llm = FakeLLM()
+        if adjust:
+            llm.queue(MechanicalLoadOutput, mechanical_output())
+            llm.queue(PlanAdjustmentOutput, adjust_all("REDUCE"))
+        else:  # keeps the breakdown alert the deterministic analysis requires
+            llm.queue(
+                MechanicalLoadOutput,
+                mechanical_output(plan_adjustment_needed=False, adjustment_request=None),
+            )
+        return llm.queue(NutritionRecoveryOutput, nutrition_output())
+
+    await run_post_activity_pipeline(session, run_llm(True), athlete, activity)  # type: ignore[arg-type]
+    second = run_llm(True)
+    await run_post_activity_pipeline(session, second, athlete, activity)  # type: ignore[arg-type]
+
+    # The second analysis reviewed the ORIGINAL workouts, not the already reduced ones
+    reviewed = second.calls_for(PlanAdjustmentOutput)[0].context["workouts_to_review"]
+    assert [w["title"] for w in reviewed] == ["Workout +1", "Workout +2", "Workout +3"]
+    revs = await history(session, workouts[1].id)
+    assert [r.status for r in revs] == [RevisionStatus.SUPERSEDED, RevisionStatus.APPLIED]
+
+    # A third analysis that needs no change restores the original plan
+    await run_post_activity_pipeline(session, run_llm(False), athlete, activity)  # type: ignore[arg-type]
+    for w in workouts[1:4]:
+        await session.refresh(w)
+        assert w.status == WorkoutStatus.PLANNED and w.title.startswith("Workout +")
+        assert w.original_snapshot is None
+
+
+async def test_list_activities_date_range(
+    api: tuple[httpx.AsyncClient, FakeLLM, list[tuple[uuid.UUID, uuid.UUID]]],
+    session: AsyncSession,
+    athlete: User,
+    storage: LocalFitStorage,
+) -> None:
+    client, _, _ = api
+    await _ingest_today(session, athlete, storage)
+    today = local_today(athlete)
+    hit = await client.get(f"/activities?from={today}&to={today}", headers=_h(athlete))
+    miss = await client.get(
+        f"/activities?from={today - timedelta(days=9)}&to={today - timedelta(days=2)}",
+        headers=_h(athlete),
+    )
+    assert len(hit.json()) == 1 and miss.json() == []
+
+
+async def test_upload_without_analysis_then_background_analyze(
+    api: tuple[httpx.AsyncClient, FakeLLM, list[tuple[uuid.UUID, uuid.UUID]]], athlete: User
+) -> None:
+    """Dashboard flow: upload (no analysis) → tags or skip → exactly one pipeline run."""
+    client, _, launched = api
+    files = {"file": ("run.fit", build_fit(synthetic_run(30)), "application/octet-stream")}
+    up = await client.post("/activities/upload-fit?analyze=false", headers=_h(athlete), files=files)
+    assert up.status_code == 201 and launched == []
+
+    activity_id = up.json()["activity"]["id"]
+    started = await client.post(
+        f"/activities/{activity_id}/analyze?background=true", headers=_h(athlete)
+    )
+    assert started.status_code == 202
+    assert launched == [(athlete.id, uuid.UUID(activity_id))]
+
+
+async def test_rerunning_onboarding_keeps_intervals_credentials(
+    api: tuple[httpx.AsyncClient, FakeLLM, list[tuple[uuid.UUID, uuid.UUID]]],
+    session: AsyncSession,
+    athlete: User,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from app.services import intervals_sync
+
+    async def _ok(self: intervals_sync.IntervalsClient) -> dict[str, object]:
+        return {}
+
+    monkeypatch.setattr(intervals_sync.IntervalsClient, "get_athlete", _ok)
+    client, _, _ = api
+    connected = {"profile": profile_payload(intervals_athlete_id="i42", intervals_api_key="k-1")}
+    assert (
+        await client.put("/me/onboarding", headers=_h(athlete), json=connected)
+    ).status_code == 200
+
+    # The wizard cannot pre-fill the write-only key: a re-run without it keeps the connection
+    rerun = await client.put(
+        "/me/onboarding", headers=_h(athlete), json={"profile": profile_payload()}
+    )
+    assert rerun.status_code == 200
+    assert rerun.json()["intervals_connected"] is True
+    assert rerun.json()["intervals_athlete_id"] == "i42"
+
+    pbs = await client.get("/me/personal-bests", headers=_h(athlete))
+    assert pbs.status_code == 200 and pbs.json()[0]["distance_m"] == 42195

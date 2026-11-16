@@ -11,6 +11,7 @@ from pydantic import Field, model_validator
 
 from app.models.enums import (
     BlockPhase,
+    CalibrationConfidence,
     Methodology,
     PlanStatus,
     RevisionSource,
@@ -37,6 +38,7 @@ class TrainingZone(StrictModel):
 class AthleteCalibration(StrictModel):
     """Zones and thresholds derived from recent PBs, threshold HR and background."""
 
+    confidence: CalibrationConfidence
     threshold_pace_s_per_km: float | None = Field(default=None, gt=0)
     threshold_hr: int | None = Field(default=None, gt=0)
     zones: list[TrainingZone]

@@ -33,6 +33,22 @@ class WorkType(StrEnum):
     PHYSICAL = "PHYSICAL"
 
 
+class StrengthSetting(StrEnum):
+    NONE = "NONE"  # no strength work possible
+    HOME = "HOME"  # bodyweight, dumbbells, kettlebell
+    GYM = "GYM"
+
+
+class HrSensor(StrEnum):
+    CHEST_STRAP = "CHEST_STRAP"
+    WRIST_OPTICAL = "WRIST_OPTICAL"
+
+
+class DataCoverage(StrEnum):
+    HIGH = "HIGH"  # recorded history reflects the athlete's real volume
+    LOW = "LOW"  # sparse history: rely on the declared weekly volume
+
+
 class Surface(StrEnum):
     ASPHALT = "ASPHALT"
     TRAIL = "TRAIL"
@@ -150,6 +166,12 @@ class AgentRunStatus(StrEnum):
 class Feedback(StrEnum):
     UP = "UP"
     DOWN = "DOWN"
+
+
+class CalibrationConfidence(StrEnum):
+    HIGH = "HIGH"  # flat PB within 6 months
+    MEDIUM = "MEDIUM"  # within 12 months
+    LOW = "LOW"  # older, non-flat or missing → schedule a test to recalibrate
 
 
 class Severity(StrEnum):

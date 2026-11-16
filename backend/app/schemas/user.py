@@ -8,7 +8,9 @@ from pydantic import Field, SecretStr, model_validator
 
 from app.models.enums import (
     AthleteBackground,
+    HrSensor,
     Methodology,
+    StrengthSetting,
     Surface,
     TrainingSlot,
     Weekday,
@@ -53,7 +55,8 @@ class _ProfileFields(StrictModel):
     threshold_hr: int | None = Field(default=None, gt=0, le=230)
     max_hr: int | None = Field(default=None, gt=0, le=240)
     resting_hr: int | None = Field(default=None, gt=0, le=120)
-    weekly_volume_km: float | None = Field(default=None, ge=0)
+    weekly_volume_km: float = Field(ge=0, le=300, description="Usual km/week, last 8-12 weeks")
+    peak_volume_km: float | None = Field(default=None, ge=0, le=300)
 
     target_race_name: str | None = Field(default=None, max_length=160)
     target_race_date: date | None = None
@@ -68,6 +71,13 @@ class _ProfileFields(StrictModel):
     avg_sleep_hours: float | None = Field(default=None, ge=0, le=14)
     terrain_access: list[Surface] = Field(min_length=1)
     methodology: Methodology = Methodology.TRADITIONAL
+    double_sessions_ok: bool
+    long_run_day: Weekday | None = None
+    strength_sessions_per_week: int = Field(ge=0, le=7)
+    strength_setting: StrengthSetting
+    hr_sensor: HrSensor | None = None
+    injury_notes: str | None = Field(default=None, max_length=1000)
+    coach_notes: str | None = Field(default=None, max_length=2000)
 
     @model_validator(mode="after")
     def _hr_consistency(self) -> Self:
@@ -99,12 +109,20 @@ class ProfileUpdate(StrictModel):
     threshold_hr: int | None = Field(default=None, gt=0, le=230)
     max_hr: int | None = Field(default=None, gt=0, le=240)
     resting_hr: int | None = Field(default=None, gt=0, le=120)
-    weekly_volume_km: float | None = Field(default=None, ge=0)
+    weekly_volume_km: float | None = Field(default=None, ge=0, le=300)
+    peak_volume_km: float | None = Field(default=None, ge=0, le=300)
     target_race_name: str | None = Field(default=None, max_length=160)
     target_race_date: date | None = None
     target_race_distance_m: int | None = Field(default=None, gt=0)
     target_race_time_s: int | None = Field(default=None, gt=0)
     target_race_surface: Surface | None = None
+    double_sessions_ok: bool | None = None
+    long_run_day: Weekday | None = None
+    strength_sessions_per_week: int | None = Field(default=None, ge=0, le=7)
+    strength_setting: StrengthSetting | None = None
+    hr_sensor: HrSensor | None = None
+    injury_notes: str | None = Field(default=None, max_length=1000)
+    coach_notes: str | None = Field(default=None, max_length=2000)
     preferred_slot: TrainingSlot | None = None
     available_days: list[Weekday] | None = Field(default=None, min_length=1)
     work_type: WorkType | None = None
@@ -125,6 +143,7 @@ class ProfileRead(ORMModel):
     max_hr: int | None
     resting_hr: int | None
     weekly_volume_km: float | None
+    peak_volume_km: float | None
     target_race_name: str | None
     target_race_date: date | None
     target_race_distance_m: int | None
@@ -137,6 +156,13 @@ class ProfileRead(ORMModel):
     avg_sleep_hours: float | None
     terrain_access: list[Surface]
     methodology: Methodology
+    double_sessions_ok: bool
+    long_run_day: Weekday | None
+    strength_sessions_per_week: int
+    strength_setting: StrengthSetting
+    hr_sensor: HrSensor | None
+    injury_notes: str | None
+    coach_notes: str | None
     intervals_athlete_id: str | None
     intervals_connected: bool  # derived; the API key itself is never exposed
     updated_at: datetime | None

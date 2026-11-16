@@ -22,10 +22,17 @@ Validator = Callable[[T], list[str]]
 MAX_ATTEMPTS = 2  # first try + one repair round with the violations as feedback
 
 
+def _dump(data: dict[str, Any]) -> str:
+    """Deterministic rendering (sorted keys) keeps identical inputs byte-identical (cache)."""
+    return json.dumps(data, sort_keys=True, default=str, ensure_ascii=False, indent=1)
+
+
+def render_prefix(stable_context: dict[str, Any]) -> str:
+    return f"<athlete_context>\n{_dump(stable_context)}\n</athlete_context>"
+
+
 def render_prompt(task: str, context: dict[str, Any]) -> str:
-    """Deterministic rendering (sorted keys) keeps identical inputs byte-identical."""
-    body = json.dumps(context, sort_keys=True, default=str, ensure_ascii=False, indent=1)
-    return f"{task}\n\n<context>\n{body}\n</context>"
+    return f"{task}\n\n<context>\n{_dump(context)}\n</context>"
 
 
 async def run_agent(
@@ -40,6 +47,7 @@ async def run_agent(
     task: str,
     context: dict[str, Any],
     output_model: type[T],
+    stable_context: dict[str, Any] | None = None,
     effort: Effort,
     max_tokens: int,
     validate: Validator[T] | None = None,
@@ -55,12 +63,17 @@ async def run_agent(
         status=AgentRunStatus.ERROR,
         activity_id=activity_id,
         plan_id=plan_id,
-        input_snapshot={"task": task, "context": json.loads(json.dumps(context, default=str))},
+        input_snapshot={
+            "task": task,
+            "stable_context": json.loads(json.dumps(stable_context or {}, default=str)),
+            "context": json.loads(json.dumps(context, default=str)),
+        },
         model=llm.model,
     )
+    prefix = render_prefix(stable_context) if stable_context else None
     started = time.monotonic()
     feedback = ""
-    in_tokens = out_tokens = 0
+    usage = {"input": 0, "output": 0, "cache_creation": 0, "cache_read": 0}
     try:
         for attempt in range(1, MAX_ATTEMPTS + 1):
             prompt = render_prompt(task + feedback, context)
@@ -71,6 +84,7 @@ async def run_agent(
                     output_model=output_model,
                     effort=effort,
                     max_tokens=max_tokens,
+                    cached_prefix=prefix,
                 )
             except AgentOutputError as exc:
                 if attempt == MAX_ATTEMPTS:
@@ -80,8 +94,10 @@ async def run_agent(
                 )
                 continue
 
-            in_tokens += result.input_tokens or 0
-            out_tokens += result.output_tokens or 0
+            usage["input"] += result.input_tokens or 0
+            usage["output"] += result.output_tokens or 0
+            usage["cache_creation"] += result.cache_creation_input_tokens or 0
+            usage["cache_read"] += result.cache_read_input_tokens or 0
             log.model = result.model
             violations = validate(result.parsed) if validate else []
             if not violations:
@@ -100,8 +116,10 @@ async def run_agent(
         raise
     finally:
         log.latency_ms = int((time.monotonic() - started) * 1000)
-        log.input_tokens = in_tokens or None
-        log.output_tokens = out_tokens or None
+        log.input_tokens = usage["input"] or None
+        log.output_tokens = usage["output"] or None
+        log.cache_creation_input_tokens = usage["cache_creation"] or None
+        log.cache_read_input_tokens = usage["cache_read"] or None
         session.add(log)
         await session.commit()
         await session.refresh(log)

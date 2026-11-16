@@ -2,7 +2,6 @@
 
 import uuid
 from datetime import datetime
-from typing import Any
 
 from pydantic import Field
 
@@ -38,13 +37,14 @@ class SegmentStats(StrictModel):
     heart_rate: float | None
     pace_s_per_km: float | None
     ground_contact_ms: float | None
+    stride_length_m: float | None = None
 
 
 class CadenceHrDivergenceMetrics(StrictModel):
     """Deterministic 'Cadence vs HR Divergence' (stored in Activity.computed_metrics).
 
-    mechanical_breakdown = cadence drops > threshold (or GCT rises) in the final segment while
-    HR stays stable — muscular failure without cardiac drift.
+    mechanical_breakdown = in the final segment cadence drops > threshold, GCT rises or stride
+    length collapses, while HR stays stable — muscular failure without cardiac drift.
     """
 
     evaluated: bool
@@ -61,6 +61,8 @@ class CadenceHrDivergenceMetrics(StrictModel):
     hr_in_target_zone: bool | None = None
     cadence_drop_detected: bool = False
     ground_contact_rise_detected: bool = False
+    stride_length_change_pct: float | None = Field(default=None, description="< 0 = shorter")
+    stride_length_drop_detected: bool = False
     mechanical_breakdown: bool = False
 
 
@@ -97,7 +99,7 @@ class ActivityRead(ORMModel):
     avg_ground_contact_ms: float | None
     elevation_gain_m: float | None
     elevation_loss_m: float | None
-    computed_metrics: dict[str, Any]
+    computed_metrics: ComputedMetrics
     surface: Surface | None
     context_tags: ContextTags
 
