@@ -1,21 +1,26 @@
 import createClient, { type Middleware } from "openapi-fetch";
 
+import { accessToken, authEnabled } from "@/lib/auth";
 import type { paths } from "@/types/api";
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 /**
- * Single place where requests are authenticated.
- * 5.0-5.5: backend dev user header. 5.6: replaced by the Supabase session token.
+ * Single place where requests are authenticated: the Supabase access token when Supabase is
+ * configured, otherwise the backend's development user header (local only).
  */
-function authHeaders(): Record<string, string> {
+async function authHeaders(): Promise<Record<string, string>> {
+  if (authEnabled) {
+    const token = await accessToken();
+    return token ? { Authorization: `Bearer ${token}` } : {};
+  }
   const devUser = process.env.NEXT_PUBLIC_DEV_USER_ID;
   return devUser ? { "X-Dev-User-Id": devUser } : {};
 }
 
 const auth: Middleware = {
-  onRequest({ request }) {
-    for (const [key, value] of Object.entries(authHeaders())) request.headers.set(key, value);
+  async onRequest({ request }) {
+    for (const [key, value] of Object.entries(await authHeaders())) request.headers.set(key, value);
     return request;
   },
 };

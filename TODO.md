@@ -48,7 +48,12 @@ Lettura del sonno da Apple Salute / Google Health Connect: richiede un'app nativ
 - **Fasce orarie multiple** nel profilo (es. mattina + a volte sera): oggi `preferred_slot` è singolo.
 - **Stima automatica di FC max / FC soglia** dai file caricati (gare, test di ricalibrazione),
   invece di lasciarle vuote.
-- **Pagina impostazioni/profilo** nel frontend (l'endpoint `PATCH /me/profile` esiste già).
+- **Pagina impostazioni/profilo** (`/settings`), al posto del wizard (oggi `/onboarding` è bloccato
+  per chi ha un piano attivo e il link "Profilo e obiettivi" è stato rimosso):
+  - sezioni (profilo, settimana, allenamento, Intervals.icu) ciascuna con il proprio "Salva",
+    via `PATCH /me/profile` (esiste già);
+  - cambio di gara/obiettivo: salvare non rigenera nulla; avviso "il piano è costruito sulla gara
+    precedente" + pulsante "Rigenera il piano" con conferma esplicita e costo indicato.
 - **Dislivello inaffidabile** (altitudine GPS): eventuale correzione con modello altimetrico (DEM).
 - **Pianificazione pre-gara all'estero**: giorni di viaggio/fuso → protocollo intestino e sonno.
 - **Piano senza gara che si rinnova da solo** (permanenza): a 2-3 settimane dalla fine del piano
@@ -60,3 +65,8 @@ Lettura del sonno da Apple Salute / Google Health Connect: richiede un'app nativ
   (Opus). Per la chat (domande frequenti, effort `low`) valutare un modello più economico (es.
   Sonnet 5.5) con un setting dedicato per agent (es. `COACH_CHAT_MODEL`), confrontando qualità
   delle risposte e costo sugli stessi messaggi prima di cambiarlo.
+- **Servizio email esterno per Supabase Auth** (SMTP personalizzato, es. Resend/Postmark): quello
+  incluso ha limiti di invio molto bassi, ok solo per i primi alpha tester. Serve anche per il
+  reset della password (oggi assente).
+- **Skill Supabase (`supabase/agent-skills`)**: leggerne il contenuto e valutarle al passaggio in
+  produzione (database Supabase, RLS, migrazioni, storage dei `.fit`).

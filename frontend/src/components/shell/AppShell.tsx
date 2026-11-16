@@ -4,6 +4,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { type ReactNode, Suspense } from "react";
 
+import { SignOutButton } from "@/components/auth/SignOutButton";
 import { Wordmark } from "@/components/brand/Wordmark";
 import { IconCalendar, IconChat, IconGrid } from "@/components/icons";
 import { ThemeToggle } from "@/components/shell/ThemeToggle";
@@ -83,9 +84,7 @@ export function AppShell({ children }: { children: ReactNode }) {
         </Link>
         <ActiveNav render={(p) => <SideNav {...p} />} />
         <div className="mt-auto flex items-center justify-between">
-          <Link href="/onboarding" className="px-3 text-xs text-fg-subtle hover:text-fg">
-            Profilo e obiettivi
-          </Link>
+          <SignOutButton className="px-3 text-xs" />
           <ThemeToggle />
         </div>
       </aside>
@@ -93,7 +92,10 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-20 flex items-center justify-between border-b border-line bg-canvas/85 px-4 py-3 backdrop-blur md:hidden">
           <Wordmark className="text-base" />
-          <ThemeToggle />
+          <div className="flex items-center gap-3">
+            <SignOutButton />
+            <ThemeToggle />
+          </div>
         </header>
 
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 pb-28 pt-6 sm:px-6 md:pb-12 md:pt-10">

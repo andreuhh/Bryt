@@ -78,7 +78,26 @@ Then fill in the configuration files:
   cd ~/Desktop/Bryt/backend && .venv/bin/python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
   ```
 
-- `frontend/.env.local` — `NEXT_PUBLIC_DEV_USER_ID` (development user, until Supabase login is in place).
+- `backend/.env` — `SUPABASE_URL` (Supabase → Project Settings → API Keys): the backend verifies
+  login tokens against it.
+- `frontend/.env.local` — `NEXT_PUBLIC_SUPABASE_URL` and `NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY`
+  (same page). With both empty the app skips the login and uses the local development user
+  `NEXT_PUBLIC_DEV_USER_ID`.
+- Supabase → Authentication → URL Configuration: Site URL `http://localhost:3000`, Redirect URLs
+  `http://localhost:3000/**`.
+
+### Moving data to your Supabase account
+
+Data created before the login existed belongs to the development user. Sign in once, copy your
+user id (Supabase → Authentication → Users), then:
+
+```
+cd ~/Desktop/Bryt/backend
+.venv/bin/python -m scripts.reassign_user --from 11111111-1111-1111-1111-111111111111 --to <your user id>
+.venv/bin/python -m scripts.reassign_user --from 11111111-1111-1111-1111-111111111111 --to <your user id> --apply
+```
+
+The first command is a dry run that only lists what would move.
 
 ---
 

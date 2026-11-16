@@ -1,8 +1,10 @@
 "use client";
 
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useEffect, useRef, useState } from "react";
 
+import { SignOutButton } from "@/components/auth/SignOutButton";
 import { Wordmark } from "@/components/brand/Wordmark";
 import { ReviewZones } from "@/components/onboarding/Finish";
 import {
@@ -48,11 +50,25 @@ export function OnboardingWizard() {
   const savedPbs = usePersonalBests();
   const activePlan = useActivePlan();
   const submit = useSubmitOnboarding();
+  const router = useRouter();
 
   const [draft, setDraft] = useState<Draft | null>(null);
   const [step, setStep] = useState(0);
   const [errors, setErrors] = useState<Errors>({});
   const top = useRef<HTMLDivElement>(null);
+  // Decided once on entry: athletes with an active plan don't redo the onboarding (profile
+  // editing will get its own page). Without a plan the wizard stays open to finish the setup.
+  const [entry, setEntry] = useState<"pending" | "allowed" | "blocked">("pending");
+
+  useEffect(() => {
+    if (entry !== "pending" || activePlan.isPending) return;
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- one-time decision from async data
+    setEntry(activePlan.isSuccess ? "blocked" : "allowed");
+  }, [entry, activePlan.isPending, activePlan.isSuccess]);
+
+  useEffect(() => {
+    if (entry === "blocked") router.replace("/dashboard");
+  }, [entry, router]);
 
   // Initial draft: resume the browser draft, else pre-fill from an existing profile
   useEffect(() => {
@@ -66,7 +82,7 @@ export function OnboardingWizard() {
     if (draft) saveDraft(draft);
   }, [draft]);
 
-  if (!draft || today === null) return <Skeleton className="h-96" />;
+  if (entry !== "allowed" || !draft || today === null) return <Skeleton className="h-96" />;
 
   const set = (patch: Partial<Draft>) => {
     setDraft((d) => ({ ...(d ?? EMPTY_DRAFT), ...patch }));
@@ -99,10 +115,13 @@ export function OnboardingWizard() {
     <div ref={top} className="mx-auto flex w-full max-w-2xl flex-col gap-8 px-4 py-8 sm:py-12">
       <header className="flex items-center justify-between">
         <Wordmark className="text-base" />
-        {profile.data && (
+        {profile.data ? (
           <Link href="/dashboard" className="text-sm text-fg-muted hover:text-fg">
             Esci
           </Link>
+        ) : (
+          // New account: no app to go back to yet, only sign out
+          <SignOutButton className="text-sm" />
         )}
       </header>
 

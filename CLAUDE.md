@@ -58,8 +58,14 @@ npm run build && npm run lint
   (da `backend/`) → `frontend/openapi.json` → `npm run gen:api` → `src/types/api.ts`. Rigenerare a
   ogni modifica degli schemi Pydantic. Alias leggibili in `src/lib/types.ts`.
 - **Client API** `src/lib/api.ts` (`openapi-fetch`, tipizzato): unico punto di autenticazione
-  (`X-Dev-User-Id` da `NEXT_PUBLIC_DEV_USER_ID` fino al 5.6, poi token Supabase). `unwrap()`
-  converte gli errori in `ApiError(status)`.
+  (`Authorization: Bearer <token Supabase>` se `NEXT_PUBLIC_SUPABASE_URL`/`_PUBLISHABLE_KEY` sono
+  impostati, altrimenti `X-Dev-User-Id` da `NEXT_PUBLIC_DEV_USER_ID`). `unwrap()` converte gli
+  errori in `ApiError(status)`.
+- **Auth** (`lib/auth.ts`): Supabase solo lato browser (email + password), sessione in
+  supabase-js; `AuthGate` protegge `(app)` e `/onboarding` → `/login?next=…`. Senza profilo,
+  `RequireProfile` porta a `/onboarding`; con un piano attivo `/onboarding` rimanda a `/dashboard`.
+  Al logout e al cambio utente: `queryClient.clear()` e rimozione dei dati locali per utente (chat, bozza
+  onboarding). `scripts.reassign_user` sposta i dati dall'utente di sviluppo a un account reale.
 - **Dati utente lato client** con TanStack Query (`src/lib/queries.ts`, chiavi in `keys`); le
   pagine sono gusci statici che montano una vista client (`components/<area>/<Area>View.tsx`).
 - **Cache Components**: niente `new Date()` durante il prerender. La data di oggi si legge con
@@ -387,4 +393,4 @@ Sviluppo in 5 step sequenziali, con conferma esplicita dell'utente tra uno step 
 2. ✅ Database Models & Schemi Pydantic (Shared State)
 3. ✅ Motore deterministico di ingestione (Intervals.icu + parser `.fit`)
 4. ✅ Pipeline Multi-Agent
-5. Frontend completo (Revolut UI)
+5. ✅ Frontend completo (Revolut UI)
