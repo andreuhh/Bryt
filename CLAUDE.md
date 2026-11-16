@@ -274,9 +274,14 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
   presto un test di ricalibrazione. Esposta da `GET /me/calibration`. Zone Friel (% FC soglia / % passo soglia) + zona `DT`
   (double threshold, sotto LT2). FC soglia stimata al 90% della FC max se assente.
 - `services/history.py`: baseline 28 giorni (volume, passo, cadenza, superfici, rapporto
-  acuto:cronico). `data_coverage` LOW (< 8 corse o km registrati < 50% del dichiarato) →
-  `effective_weekly_km` = volume dichiarato e rapporto acuto:cronico non calcolato e `elevation_quality` (totali del dispositivo vs dislivello ricalcolato dalla
-  serie: se incoerenti → altitudine non affidabile, es. GPS senza barometro).
+  acuto:cronico). `data_coverage` giudicata sulle **8 settimane** (`HABITUAL_DAYS`): LOW (< 8
+  corse o km registrati < 50% del dichiarato) → `effective_weekly_km` = volume dichiarato e
+  rapporto acuto:cronico non calcolato; HIGH con 4 settimane basse = calo **reale** (scarico,
+  gara, recupero), non dati mancanti. Agli agent anche `habitual_weekly_km`, `weekly_km` (8
+  settimane) e `recent_races` (tabella PB, che tiene anche le gare non PB, + workout `RACE`
+  completati; recupero ≈ 1 giorno per miglio → `in_post_race_recovery`).
+  `elevation_quality`: totali del dispositivo vs dislivello ricalcolato dalla
+  serie: se incoerenti → altitudine non affidabile, es. GPS senza barometro.
 
 ### Autenticazione (`app/core/auth.py`, `app/api/deps.py`)
 - Produzione: `Authorization: Bearer <access token Supabase>`, verificato via JWKS

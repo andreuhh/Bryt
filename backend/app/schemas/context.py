@@ -1,9 +1,23 @@
 """Deterministic context handed to the agents (computed by services, never by the LLM)."""
 
+import datetime
+
 from pydantic import Field
 
 from app.models.enums import DataCoverage
 from app.schemas.common import StrictModel
+
+
+class RecentRace(StrictModel):
+    """A race in the last weeks (result logged as PB/race, or a completed RACE workout)."""
+
+    date: datetime.date
+    days_ago: int
+    distance_m: int
+    name: str | None = None
+    recovery_until: datetime.date = Field(
+        description="End of the expected post-race recovery (about one day per mile raced)"
+    )
 
 
 class TrainingBaseline(StrictModel):
@@ -11,11 +25,28 @@ class TrainingBaseline(StrictModel):
 
     window_days: int
     data_coverage: DataCoverage = Field(
-        description="LOW = recorded history does not reflect the real volume: use declared"
+        description="Judged on the habitual window: LOW = recorded history does not reflect "
+        "the real volume (use declared); HIGH = recordings are complete, so a low recent "
+        "volume is real (taper, race, recovery, break), not missing data"
     )
     declared_weekly_km: float | None = None
     effective_weekly_km: float | None = Field(
-        default=None, description="Volume to plan from (declared when coverage is LOW)"
+        default=None,
+        description="Current volume to plan from (recent recorded; declared when coverage is LOW)",
+    )
+    habitual_window_days: int
+    habitual_weekly_km: float = Field(
+        description="Recorded weekly average over the habitual window (longer than window_days)"
+    )
+    weekly_km: list[float] = Field(
+        default_factory=list,
+        description="Recorded km per 7-day period over the habitual window, oldest first",
+    )
+    recent_races: list[RecentRace] = Field(default_factory=list)
+    in_post_race_recovery: bool = Field(
+        default=False,
+        description="A recent race's recovery window is still open: low volume and easy "
+        "efforts are expected, not a loss of form",
     )
     activities: int
     total_km: float

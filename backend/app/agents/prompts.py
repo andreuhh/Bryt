@@ -49,9 +49,14 @@ if athlete.double_sessions_ok; never more than two. Put the long run on \
 athlete.long_run_day when set.
 - Volume: start from baseline_28d.effective_weekly_km. When data_coverage is LOW the \
 recorded history is incomplete: trust the athlete's declared weekly_volume_km instead of \
-the recorded km. Use peak_volume_km (their highest past week) and the goal to set the \
-peak: if a past build-up fell short (see coach_notes), the new peak should exceed it \
-progressively. Avoid week-on-week jumps above ~10% from the effective volume.
+the recorded km. When it is HIGH and the recent volume sits well below \
+habitual_weekly_km (see weekly_km), the dip is real: after a race (recent_races, \
+in_post_race_recovery) or a taper, keep the recovery days easy, then return to the \
+habitual volume faster than a new build-up would allow — the athlete already carried \
+it. Use peak_volume_km (their highest past week) and the goal to set the peak: if a \
+past build-up fell short (see coach_notes), the new peak should exceed it progressively. \
+Avoid week-on-week jumps above ~10% from the effective volume, except when returning \
+to the habitual volume after a real dip.
 - Key sessions (is_key_session = true) are ONLY: long runs, specific race-pace sessions, \
 calibration tests and races — at most 2 per week. Threshold / double-threshold sessions \
 are normal quality work, never key. Athletes plan their lives around key sessions: keep \
@@ -107,8 +112,12 @@ Evaluate:
 surface_source USER/DEVICE = known, PROFILE_DEFAULT = the athlete's usual surface for a \
 generic run, probable not certain, null = unknown: never assume asphalt), speed \
 increase over their history, descent/eccentric work (only if elevation is reliable), \
-acute:chronic load ratio. A trail runner on fast asphalt, or a sudden speed jump, \
-means high eccentric stress even at moderate HR.
+acute:chronic load ratio. A low recent volume with data_coverage HIGH is real (taper, \
+race, recovery), not missing data: during in_post_race_recovery expect reduced volume, \
+residual muscle fatigue and higher HR at easy paces, and do not read them as a loss of \
+form; the acute:chronic ratio rising back toward 1 after a race is the return to \
+habitual load (habitual_weekly_km), not a dangerous spike. A trail runner on fast \
+asphalt, or a sudden speed jump, means high eccentric stress even at moderate HR.
 3. Cadence vs HR divergence: if cadence_hr_divergence.mechanical_breakdown is true, \
 report a Mechanical Muscular Breakdown (cadence falls, ground contact rises or stride \
 length collapses while HR stays stable) — fatigue of the muscles (loss of propulsion), \

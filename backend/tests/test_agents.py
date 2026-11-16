@@ -16,7 +16,7 @@ from app.agents.scheduler import get_plan_job_launcher
 from app.agents.training_periodization import build_plan, refine_plan, start_plan_generation
 from app.core.database import get_session
 from app.main import app
-from app.models import AgentExecutionLog, PersonalBest, TrainingPlan, User, Workout
+from app.models import Activity, AgentExecutionLog, PersonalBest, TrainingPlan, User, Workout
 from app.models.enums import (
     ActivitySource,
     AgentName,
@@ -920,6 +920,63 @@ async def test_baseline_uses_declared_volume_when_history_is_sparse(
 
     no_declared = await training_baseline(session, athlete.id, later)
     assert no_declared.effective_weekly_km == no_declared.weekly_avg_km
+
+
+async def test_baseline_reads_post_race_dip_as_real_volume(
+    session: AsyncSession, athlete: User
+) -> None:
+    """Complete recordings: 4 weeks at ~72 km, then marathon + recovery at ~30 km/week."""
+    from app.services.history import training_baseline
+
+    now = datetime(2026, 11, 16, tzinfo=UTC)
+    race_day = date(2026, 11, 1)
+    for day in range(56, 0, -1):
+        start = now - timedelta(days=day)
+        if start.weekday() in (1, 3, 5, 6) and start.date() != race_day:
+            km = 18 if day > 28 else 5  # habitual block, then taper/recovery
+            session.add(
+                Activity(
+                    user_id=athlete.id,
+                    source=ActivitySource.INTERVALS,
+                    external_id=f"a{day}",
+                    start_time=start,
+                    duration_s=km * 300,
+                    distance_m=km * 1000,
+                )
+            )
+    session.add(
+        Activity(
+            user_id=athlete.id,
+            source=ActivitySource.INTERVALS,
+            external_id="nyc",
+            start_time=datetime.combine(race_day, time(14, 0), tzinfo=UTC),
+            duration_s=12298,
+            distance_m=42195,
+        )
+    )
+    session.add(
+        PersonalBest(
+            user_id=athlete.id,
+            distance_m=42195,
+            time_s=12298,
+            achieved_on=race_day,
+            surface=Surface.ASPHALT,
+            event_name="NYC Marathon",
+        )
+    )
+    await session.commit()
+
+    base = await training_baseline(session, athlete.id, now, declared_weekly_km=72)
+    assert base.weekly_avg_km < 0.5 * 72  # the old 28-day rule would call this missing data
+    assert base.data_coverage == DataCoverage.HIGH
+    assert base.effective_weekly_km == base.weekly_avg_km
+    assert base.acute_chronic_ratio is not None
+    assert base.habitual_weekly_km > base.weekly_avg_km
+    assert len(base.weekly_km) == 8 and base.weekly_km[0] == 72
+    assert [r.name for r in base.recent_races] == ["NYC Marathon"]
+    assert base.recent_races[0].days_ago == 15
+    assert base.recent_races[0].recovery_until == date(2026, 11, 28)
+    assert base.in_post_race_recovery
 
 
 async def test_block_validator_caps_key_sessions_and_double_runs(
