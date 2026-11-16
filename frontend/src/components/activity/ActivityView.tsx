@@ -33,6 +33,7 @@ export function ActivityView() {
   const report = useActivityReport(id, watching);
   const analyze = useAnalyzeInBackground();
   const [editing, setEditing] = useState<Activity | null>(null);
+  const [tagsChanged, setTagsChanged] = useState(false);
 
   const rows = useMemo(() => (streams.data ? buildSeries(streams.data) : []), [streams.data]);
   const divergence = activity.data?.computed_metrics.cadence_hr_divergence;
@@ -44,7 +45,13 @@ export function ActivityView() {
   const a = activity.data;
   const data = report.data;
   const running = watching && !reportComplete(data);
-  const startAnalysis = () => analyze.mutate(id, { onSuccess: () => setWatching(true) });
+  const startAnalysis = () =>
+    analyze.mutate(id, {
+      onSuccess: () => {
+        setWatching(true);
+        setTagsChanged(false);
+      },
+    });
 
   return (
     <div className="flex flex-col gap-6">
@@ -61,7 +68,12 @@ export function ActivityView() {
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {a.surface && <Badge>{SURFACE_LABEL[a.surface]}</Badge>}
+            {a.surface && (
+              <Badge>
+                {SURFACE_LABEL[a.surface]}
+                {a.surface_source === "PROFILE_DEFAULT" && " · abituale"}
+              </Badge>
+            )}
             <Badge tone="outline">{a.source === "INTERVALS" ? "Intervals.icu" : "Caricata a mano"}</Badge>
             <Button variant="secondary" size="sm" onClick={() => setEditing(a)}>
               Modifica tag
@@ -109,6 +121,16 @@ export function ActivityView() {
 
       <section className="flex flex-col gap-4">
         <h2 className="text-xl font-semibold">Analisi degli agent</h2>
+        {tagsChanged && !running && (
+          <Card variant="card" className="flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-fg-muted">
+              Hai aggiornato i tag: l&apos;analisi qui sotto non ne tiene ancora conto.
+            </p>
+            <Button size="sm" loading={analyze.isPending} onClick={startAnalysis}>
+              Aggiorna l&apos;analisi
+            </Button>
+          </Card>
+        )}
         {report.isPending ? (
           <Skeleton className="h-48" />
         ) : running ? (
@@ -144,10 +166,11 @@ export function ActivityView() {
       </section>
 
       <ContextTagsModal
+        mode="edit"
         title="Modifica il contesto"
         activity={editing}
         onClose={() => setEditing(null)}
-        onAnalysisStarted={() => setWatching(true)}
+        onDone={() => setTagsChanged(true)}
       />
     </div>
   );

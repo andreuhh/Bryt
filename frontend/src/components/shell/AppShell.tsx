@@ -6,13 +6,14 @@ import { type ReactNode, Suspense } from "react";
 
 import { SignOutButton } from "@/components/auth/SignOutButton";
 import { Wordmark } from "@/components/brand/Wordmark";
-import { IconCalendar, IconChat, IconGrid } from "@/components/icons";
+import { IconCalendar, IconChat, IconGrid, IconSettings } from "@/components/icons";
 import { ThemeToggle } from "@/components/shell/ThemeToggle";
 
 const NAV = [
   { href: "/dashboard", label: "Dashboard", Icon: IconGrid },
   { href: "/plan", label: "Piano", Icon: IconCalendar },
   { href: "/chat", label: "Coach", Icon: IconChat },
+  { href: "/settings", label: "Impostazioni", Icon: IconSettings },
 ] as const;
 
 type NavProps = { pathname: string | null };
@@ -48,7 +49,7 @@ function BottomNav({ pathname }: NavProps) {
           key={href}
           href={href}
           aria-current={isActive(pathname, href) ? "page" : undefined}
-          className={`flex flex-col items-center gap-0.5 rounded-card px-4 py-1.5 text-[11px] font-medium ${
+          className={`flex flex-col items-center gap-0.5 rounded-card px-2 py-1.5 text-[11px] font-medium ${
             isActive(pathname, href) ? "text-fg" : "text-fg-subtle"
           }`}
         >
@@ -92,10 +93,7 @@ export function AppShell({ children }: { children: ReactNode }) {
       <div className="flex min-w-0 flex-1 flex-col">
         <header className="sticky top-0 z-20 flex items-center justify-between border-b border-line bg-canvas/85 px-4 py-3 backdrop-blur md:hidden">
           <Wordmark className="text-base" />
-          <div className="flex items-center gap-3">
-            <SignOutButton />
-            <ThemeToggle />
-          </div>
+          <ThemeToggle />
         </header>
 
         <main className="mx-auto w-full max-w-6xl flex-1 px-4 pb-28 pt-6 sm:px-6 md:pb-12 md:pt-10">

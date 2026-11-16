@@ -14,6 +14,10 @@ from app.schemas.common import StrictModel
 class IntervalsSyncRequest(StrictModel):
     oldest: date | None = Field(default=None, description="Default: today - sync window")
     newest: date | None = Field(default=None, description="Default: today")
+    analyze: bool = Field(
+        default=True,
+        description="False = history backfill: import without running the agents (no LLM cost)",
+    )
 
 
 class SyncItemStatus(StrEnum):

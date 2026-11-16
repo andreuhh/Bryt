@@ -5,7 +5,7 @@ from datetime import datetime
 
 from pydantic import Field
 
-from app.models.enums import ActivitySource, Surface
+from app.models.enums import ActivitySource, Surface, SurfaceSource
 from app.schemas.common import ORMModel, StrictModel
 
 
@@ -101,6 +101,7 @@ class ActivityRead(ORMModel):
     elevation_loss_m: float | None
     computed_metrics: ComputedMetrics
     surface: Surface | None
+    surface_source: SurfaceSource | None
     context_tags: ContextTags
 
 

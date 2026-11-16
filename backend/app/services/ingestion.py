@@ -8,7 +8,7 @@ import asyncio
 import hashlib
 import uuid
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, timedelta
 from zoneinfo import ZoneInfo
 
 from sqlalchemy.exc import IntegrityError
@@ -20,10 +20,12 @@ from app.models.enums import (
     ActivitySource,
     PlanStatus,
     SessionSlot,
+    SurfaceSource,
     WorkoutStatus,
     WorkoutType,
 )
 from app.services.fit_parser import ParsedFit, parse_fit
+from app.services.profile import get_profile
 from app.services.storage import FitStorage
 
 
@@ -54,9 +56,15 @@ async def ingest_fit(
 
     # CPU-bound parsing off the event loop
     parsed = await asyncio.to_thread(parse_fit, fit_bytes)
+    # Same run through another channel (e.g. manual upload of the Strava export, then the
+    # Intervals.icu sync): the files differ byte-wise, the recording start does not.
+    same_run = await _find_same_run(session, user.id, parsed)
+    if same_run is not None:
+        return IngestResult(same_run, created=False)
     path = await storage.save(user.id, sha256, fit_bytes)
 
     activity = _build_activity(user.id, parsed, source, external_id, sha256, path, name)
+    await _assign_surface(session, user, activity)
     session.add(activity)
     streams = parsed.streams
     session.add(
@@ -107,6 +115,34 @@ async def _find_existing(
             match, (col(Activity.source) == source) & (col(Activity.external_id) == external_id)
         )
     stmt = select(Activity).where(Activity.user_id == user_id, match)
+    return (await session.exec(stmt)).first()
+
+
+async def _assign_surface(session: AsyncSession, user: User, activity: Activity) -> None:
+    """Watch activity mode first (trail/track/treadmill/road in the .fit); a generic "Run"
+    takes the athlete's usual surface, flagged as such (probable, not certain)."""
+    if activity.surface is not None:
+        activity.surface_source = SurfaceSource.DEVICE
+        return
+    profile = await get_profile(session, user)
+    if profile is not None and profile.default_run_surface is not None:
+        activity.surface = profile.default_run_surface
+        activity.surface_source = SurfaceSource.PROFILE_DEFAULT
+
+
+# Two exports of the same recording start within seconds of each other; two distinct runs
+# (even a double-threshold day) are hours apart.
+SAME_RUN_TOLERANCE = timedelta(minutes=2)
+
+
+async def _find_same_run(
+    session: AsyncSession, user_id: uuid.UUID, parsed: ParsedFit
+) -> Activity | None:
+    stmt = select(Activity).where(
+        Activity.user_id == user_id,
+        col(Activity.start_time) >= parsed.start_time - SAME_RUN_TOLERANCE,
+        col(Activity.start_time) <= parsed.start_time + SAME_RUN_TOLERANCE,
+    )
     return (await session.exec(stmt)).first()
 
 

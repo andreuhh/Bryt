@@ -21,10 +21,9 @@ from app.schemas.ingestion import (
 from app.services.intervals_sync import (
     IntervalsAuthError,
     IntervalsError,
-    client_for,
     default_window,
     find_profile_by_intervals_athlete,
-    sync_intervals_activities,
+    sync_user,
 )
 from app.services.profile import get_profile
 from app.services.storage import FitStorage, get_fit_storage
@@ -56,18 +55,18 @@ async def sync_intervals(
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
 
     try:
-        async with client_for(profile) as client:
-            result = await sync_intervals_activities(
-                session, user=user, client=client, storage=storage, oldest=oldest, newest=newest
-            )
+        result = await sync_user(
+            session, user=user, profile=profile, storage=storage, oldest=oldest, newest=newest
+        )
     except IntervalsAuthError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_CONTENT, str(exc)) from exc
     except IntervalsError as exc:
         raise HTTPException(status.HTTP_502_BAD_GATEWAY, str(exc)) from exc
 
-    for item in result.items:
-        if item.status == SyncItemStatus.IMPORTED and item.activity_id:
-            background.add_task(launch_pipeline, user.id, item.activity_id)
+    if body is None or body.analyze:
+        for item in result.items:
+            if item.status == SyncItemStatus.IMPORTED and item.activity_id:
+                background.add_task(launch_pipeline, user.id, item.activity_id)
     return result
 
 
@@ -122,15 +121,14 @@ async def _sync_user_window(user_id: uuid.UUID, oldest: date, newest: date) -> N
         if user is None or profile is None or not profile.intervals_connected:
             return
         try:
-            async with client_for(profile) as client:
-                result = await sync_intervals_activities(
-                    session,
-                    user=user,
-                    client=client,
-                    storage=get_fit_storage(),
-                    oldest=oldest,
-                    newest=newest,
-                )
+            result = await sync_user(
+                session,
+                user=user,
+                profile=profile,
+                storage=get_fit_storage(),
+                oldest=oldest,
+                newest=newest,
+            )
             logger.info("Webhook sync user=%s items=%d", user_id, len(result.items))
         except IntervalsError:
             logger.exception("Webhook sync failed for user=%s", user_id)

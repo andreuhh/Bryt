@@ -537,7 +537,7 @@ async def test_upload_launches_pipeline_once_and_report_endpoint(
     assert feedback.status_code == 200 and feedback.json()["feedback"] == "UP"
 
 
-async def test_context_tags_rerun_pipeline(
+async def test_context_tags_analyze_only_on_request(
     api: tuple[httpx.AsyncClient, FakeLLM, list[tuple[uuid.UUID, uuid.UUID]]], athlete: User
 ) -> None:
     client, _, launched = api
@@ -545,14 +545,23 @@ async def test_context_tags_rerun_pipeline(
     activity_id = (
         await client.post("/activities/upload-fit", headers=_h(athlete), files=files)
     ).json()["activity"]["id"]
+    body = {"surface": "ASPHALT", "context_tags": {"caffeine_mg": 200, "jet_lag_hours": 6}}
+
+    # Editing tags later: saved, no new (paid) analysis on its own
     response = await client.patch(
-        f"/activities/{activity_id}/context",
-        headers=_h(athlete),
-        json={"surface": "ASPHALT", "context_tags": {"caffeine_mg": 200, "jet_lag_hours": 6}},
+        f"/activities/{activity_id}/context", headers=_h(athlete), json=body
     )
     assert response.status_code == 200
     assert response.json()["context_tags"]["jet_lag_hours"] == 6
-    assert len(launched) == 2  # upload + tags
+    assert response.json()["surface_source"] == "USER"
+    assert len(launched) == 1  # the upload only
+
+    # Post-upload modal ("Salva e analizza")
+    response = await client.patch(
+        f"/activities/{activity_id}/context?analyze=true", headers=_h(athlete), json=body
+    )
+    assert response.status_code == 200
+    assert len(launched) == 2
 
 
 async def test_other_users_cannot_read_activity(

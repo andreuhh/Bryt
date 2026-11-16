@@ -98,7 +98,9 @@ Cadence-vs-HR divergence analysis, the athlete's 28-day baseline and contextual 
 
 Evaluate:
 1. Execution vs plan (compliance score, pace/HR deviation).
-2. Mechanical load relative to the athlete: surface (asphalt vs trail vs track), speed \
+2. Mechanical load relative to the athlete: surface (asphalt vs trail vs track; \
+surface_source USER/DEVICE = known, PROFILE_DEFAULT = the athlete's usual surface for a \
+generic run, probable not certain, null = unknown: never assume asphalt), speed \
 increase over their history, descent/eccentric work (only if elevation is reliable), \
 acute:chronic load ratio. A trail runner on fast asphalt, or a sudden speed jump, \
 means high eccentric stress even at moderate HR.

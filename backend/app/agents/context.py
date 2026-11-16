@@ -25,11 +25,13 @@ from app.services.calibration import compute_calibration
 from app.services.history import elevation_quality, training_baseline
 from app.services.profile import get_profile
 
+# Identifiers, and volatile fields that would break the cached prompt prefix
 _PRIVATE_PROFILE_FIELDS = {
     "id",
     "user_id",
     "intervals_athlete_id",
     "intervals_connected",
+    "intervals_synced_at",
     "updated_at",
 }
 _PRIVATE_ACTIVITY_FIELDS = {"external_id"}

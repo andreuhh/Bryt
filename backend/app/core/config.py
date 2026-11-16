@@ -41,6 +41,9 @@ class Settings(BaseSettings):
     intervals_webhook_secret: str = ""
     intervals_sync_default_days: int = 14
     intervals_timeout_s: float = 30.0
+    # Periodic poll (personal API keys get no webhooks): new runs within one interval
+    intervals_poll_enabled: bool = True
+    intervals_poll_interval_s: int = 900
 
     # Ingestion
     storage_dir: str = "storage"

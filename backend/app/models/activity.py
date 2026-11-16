@@ -8,7 +8,7 @@ from sqlalchemy import DateTime, Index, UniqueConstraint
 from sqlmodel import Field
 
 from app.models.base import IdMixin, TenantMixin, TimestampMixin, enum_column, jsonb_column
-from app.models.enums import ActivitySource, Surface
+from app.models.enums import ActivitySource, Surface, SurfaceSource
 
 
 class Activity(IdMixin, TimestampMixin, TenantMixin, table=True):
@@ -46,6 +46,9 @@ class Activity(IdMixin, TimestampMixin, TenantMixin, table=True):
 
     # Contextual tags (ContextTags in app.schemas.activity)
     surface: Surface | None = Field(default=None, sa_column=enum_column(Surface, nullable=True))
+    surface_source: SurfaceSource | None = Field(
+        default=None, sa_column=enum_column(SurfaceSource, nullable=True)
+    )
     context_tags: dict[str, Any] = Field(default_factory=dict, sa_column=jsonb_column())
 
 

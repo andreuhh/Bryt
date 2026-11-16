@@ -122,3 +122,46 @@ async def test_onboarding_stores_encrypted_key(
         )
     ).one()
     assert row.intervals_api_key_encrypted and row.intervals_api_key_encrypted != "plain-key"
+
+
+@pytest.mark.parametrize("analyze", [True, False])
+async def test_sync_backfill_skips_the_agents(
+    client: httpx.AsyncClient, monkeypatch: pytest.MonkeyPatch, analyze: bool
+) -> None:
+    from app.agents.pipeline import get_pipeline_launcher
+    from app.api.v1.endpoints import integrations
+    from app.schemas.ingestion import IntervalsSyncResult, SyncItem, SyncItemStatus
+
+    async def _ok(self: intervals_sync.IntervalsClient) -> dict[str, object]:
+        return {"id": self.athlete_id}
+
+    async def _sync(
+        *_: object, oldest: object, newest: object, **__: object
+    ) -> IntervalsSyncResult:
+        item = SyncItem(
+            external_id="i1", name="Lungo", status=SyncItemStatus.IMPORTED, activity_id=uuid.uuid4()
+        )
+        return IntervalsSyncResult(oldest=oldest, newest=newest, items=[item])  # type: ignore[arg-type]
+
+    launched: list[uuid.UUID] = []
+
+    async def _launch(_user_id: uuid.UUID, activity_id: uuid.UUID) -> None:
+        launched.append(activity_id)
+
+    monkeypatch.setattr(intervals_sync.IntervalsClient, "get_athlete", _ok)
+    monkeypatch.setattr(integrations, "sync_user", _sync)
+    app.dependency_overrides[get_pipeline_launcher] = lambda: _launch
+    headers = _auth()
+    payload = {
+        "profile": profile_payload(intervals_athlete_id="i42", intervals_api_key="plain-key"),
+        "personal_bests": [{"distance_m": 10000, "time_s": 2400, "achieved_on": "2026-10-01"}],
+    }
+    assert (await client.put("/me/onboarding", headers=headers, json=payload)).status_code == 200
+
+    response = await client.post(
+        "/integrations/intervals/sync",
+        headers=headers,
+        json={"oldest": "2026-09-20", "analyze": analyze},
+    )
+    assert response.status_code == 200, response.text
+    assert len(launched) == (1 if analyze else 0)

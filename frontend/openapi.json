@@ -807,7 +807,7 @@
      "activities"
     ],
     "summary": "Update Context",
-    "description": "Post-activity quick tags (surface, caffeine, jet lag…). Re-runs the agent pipeline.",
+    "description": "Post-activity quick tags (surface, caffeine, jet lag…). `analyze=true` runs the agent\npipeline (first analysis after an upload); editing tags later never re-spends on its own:\nthe athlete asks for a new analysis explicitly (POST /analyze).",
     "operationId": "update_context_api_v1_activities__activity_id__context_patch",
     "security": [
      {
@@ -823,6 +823,16 @@
        "type": "string",
        "format": "uuid",
        "title": "Activity Id"
+      }
+     },
+     {
+      "name": "analyze",
+      "in": "query",
+      "required": false,
+      "schema": {
+       "type": "boolean",
+       "default": false,
+       "title": "Analyze"
       }
      },
      {
@@ -2055,6 +2065,16 @@
        }
       ]
      },
+     "surface_source": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/SurfaceSource"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
      "context_tags": {
       "$ref": "#/components/schemas/ContextTags"
      }
@@ -2079,6 +2099,7 @@
      "elevation_loss_m",
      "computed_metrics",
      "surface",
+     "surface_source",
      "context_tags"
     ],
     "title": "ActivityRead"
@@ -3371,6 +3392,12 @@
       ],
       "title": "Newest",
       "description": "Default: today"
+     },
+     "analyze": {
+      "type": "boolean",
+      "title": "Analyze",
+      "description": "False = history backfill: import without running the agents (no LLM cost)",
+      "default": true
      }
     },
     "additionalProperties": false,
@@ -4601,6 +4628,22 @@
       "minItems": 1,
       "title": "Terrain Access"
      },
+     "default_run_surface": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "ASPHALT",
+         "GRAVEL",
+         "MIXED"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Default Run Surface"
+     },
      "methodology": {
       "$ref": "#/components/schemas/Methodology",
       "default": "TRADITIONAL"
@@ -4892,6 +4935,16 @@
       "type": "array",
       "title": "Terrain Access"
      },
+     "default_run_surface": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/Surface"
+       },
+       {
+        "type": "null"
+       }
+      ]
+     },
      "methodology": {
       "$ref": "#/components/schemas/Methodology"
      },
@@ -4963,6 +5016,18 @@
       "type": "boolean",
       "title": "Intervals Connected"
      },
+     "intervals_synced_at": {
+      "anyOf": [
+       {
+        "type": "string",
+        "format": "date-time"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Intervals Synced At"
+     },
      "updated_at": {
       "anyOf": [
        {
@@ -4999,6 +5064,7 @@
      "work_type",
      "avg_sleep_hours",
      "terrain_access",
+     "default_run_surface",
      "methodology",
      "double_sessions_ok",
      "long_run_day",
@@ -5009,6 +5075,7 @@
      "coach_notes",
      "intervals_athlete_id",
      "intervals_connected",
+     "intervals_synced_at",
      "updated_at"
     ],
     "title": "ProfileRead"
@@ -5300,6 +5367,22 @@
        }
       ],
       "title": "Terrain Access"
+     },
+     "default_run_surface": {
+      "anyOf": [
+       {
+        "type": "string",
+        "enum": [
+         "ASPHALT",
+         "GRAVEL",
+         "MIXED"
+        ]
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "title": "Default Run Surface"
      },
      "methodology": {
       "anyOf": [
@@ -5626,6 +5709,16 @@
      "MIXED"
     ],
     "title": "Surface"
+   },
+   "SurfaceSource": {
+    "type": "string",
+    "enum": [
+     "USER",
+     "DEVICE",
+     "PROFILE_DEFAULT"
+    ],
+    "title": "SurfaceSource",
+    "description": "Where an activity's surface comes from (how much the agents can trust it)."
    },
    "SyncItem": {
     "properties": {

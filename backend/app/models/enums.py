@@ -58,6 +58,14 @@ class Surface(StrEnum):
     MIXED = "MIXED"
 
 
+class SurfaceSource(StrEnum):
+    """Where an activity's surface comes from (how much the agents can trust it)."""
+
+    USER = "USER"  # tagged by the athlete
+    DEVICE = "DEVICE"  # watch activity mode in the .fit (trail, track, treadmill, road)
+    PROFILE_DEFAULT = "PROFILE_DEFAULT"  # generic "Run" → athlete's usual surface (probable)
+
+
 class Methodology(StrEnum):
     TRADITIONAL = "TRADITIONAL"
     DOUBLE_THRESHOLD = "DOUBLE_THRESHOLD"  # scuola norvegese

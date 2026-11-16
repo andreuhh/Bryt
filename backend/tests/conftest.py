@@ -8,6 +8,7 @@ os.environ["ENVIRONMENT"] = "development"
 os.environ["INTERVALS_WEBHOOK_SECRET"] = "test-webhook-secret"
 os.environ["AGENTS_ENABLED"] = "false"  # tests override the pipeline launcher explicitly
 os.environ["SCHEDULER_ENABLED"] = "false"
+os.environ["INTERVALS_POLL_ENABLED"] = "false"
 if not os.environ.get("ENCRYPTION_KEY"):
     os.environ["ENCRYPTION_KEY"] = Fernet.generate_key().decode()
 

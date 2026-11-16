@@ -1,9 +1,9 @@
 """Athlete identity, lifestyle profile and personal bests."""
 
 import uuid
-from datetime import date
+from datetime import date, datetime
 
-from sqlalchemy import Index
+from sqlalchemy import DateTime, Index
 from sqlmodel import Field
 
 from app.models.base import IdMixin, TenantMixin, TimestampMixin, enum_column, jsonb_column
@@ -65,6 +65,10 @@ class UserLifestyleProfile(IdMixin, TimestampMixin, TenantMixin, table=True):
     work_type: WorkType = Field(sa_column=enum_column(WorkType))
     avg_sleep_hours: float | None = Field(default=None, ge=0, le=14)
     terrain_access: list[Surface] = Field(default_factory=list, sa_column=jsonb_column())
+    # Surface of a generic "Run" (the .fit says nothing): athlete-specific habit
+    default_run_surface: Surface | None = Field(
+        default=None, sa_column=enum_column(Surface, nullable=True)
+    )
     methodology: Methodology = Field(
         default=Methodology.TRADITIONAL, sa_column=enum_column(Methodology)
     )
@@ -87,6 +91,10 @@ class UserLifestyleProfile(IdMixin, TimestampMixin, TenantMixin, table=True):
     # Intervals.icu integration — API key is ONLY stored Fernet-encrypted
     intervals_athlete_id: str | None = Field(default=None, max_length=32)
     intervals_api_key_encrypted: str | None = Field(default=None, repr=False)
+    # Last Intervals.icu sync (manual, on app open or periodic poll): also the poll's claim
+    intervals_synced_at: datetime | None = Field(
+        default=None, sa_type=DateTime(timezone=True), nullable=True
+    )
 
     @property
     def intervals_connected(self) -> bool:

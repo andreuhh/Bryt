@@ -8,6 +8,7 @@ import { LatestAnalysis } from "@/components/dashboard/LatestAnalysis";
 import { NextKeyTile, WeekVolumeTile } from "@/components/dashboard/StatTiles";
 import { TodayCard } from "@/components/dashboard/TodayCard";
 import { UploadCard } from "@/components/dashboard/UploadCard";
+import { useSyncOnOpen } from "@/components/dashboard/useSyncOnOpen";
 import { WeekStrip } from "@/components/dashboard/WeekStrip";
 import { WorkoutModal } from "@/components/plan/WorkoutModal";
 import { EmptyState, ErrorState, Skeleton } from "@/components/ui/States";
@@ -45,6 +46,7 @@ export function DashboardView() {
   const [selected, setSelected] = useState<Workout | null>(null);
   const [tagging, setTagging] = useState<Activity | null>(null);
   const [watching, setWatching] = useState<string | null>(null);
+  const syncing = useSyncOnOpen(profile.data, setWatching);
 
   const latest = recent.data?.[0];
   const latestReport = useActivityReport(latest?.id ?? null, watching === latest?.id);
@@ -130,7 +132,11 @@ export function DashboardView() {
             </div>
           )}
         </div>
-        <UploadCard intervalsConnected={profile.data?.intervals_connected ?? false} onUploaded={setTagging} />
+        <UploadCard
+          intervalsConnected={profile.data?.intervals_connected ?? false}
+          autoSyncing={syncing}
+          onUploaded={setTagging}
+        />
       </div>
 
       {plan.isSuccess && monday && (
@@ -153,7 +159,7 @@ export function DashboardView() {
       <LatestAnalysis activity={latest} watching={watching === latest?.id} onAnalysisStarted={setWatching} />
 
       <WorkoutModal workout={selected} onClose={() => setSelected(null)} />
-      <ContextTagsModal activity={tagging} onClose={() => setTagging(null)} onAnalysisStarted={setWatching} />
+      <ContextTagsModal activity={tagging} onClose={() => setTagging(null)} onDone={setWatching} />
     </div>
   );
 }

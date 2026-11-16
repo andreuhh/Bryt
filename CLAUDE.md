@@ -63,7 +63,7 @@ npm run build && npm run lint
   errori in `ApiError(status)`.
 - **Auth** (`lib/auth.ts`): Supabase solo lato browser (email + password), sessione in
   supabase-js; `AuthGate` protegge `(app)` e `/onboarding` → `/login?next=…`. Senza profilo,
-  `RequireProfile` porta a `/onboarding`; con un piano attivo `/onboarding` rimanda a `/dashboard`.
+  `RequireProfile` porta a `/onboarding`; `/settings` (per ora solo Intervals.icu + account); con un piano attivo `/onboarding` rimanda a `/dashboard`.
   Al logout e al cambio utente: `queryClient.clear()` e rimozione dei dati locali per utente (chat, bozza
   onboarding). `scripts.reassign_user` sposta i dati dall'utente di sviluppo a un account reale.
 - **Dati utente lato client** con TanStack Query (`src/lib/queries.ts`, chiavi in `keys`); le
@@ -92,6 +92,10 @@ npm run build && npm run lint
   Chiudere la modale non avvia nulla (la card "Ultima analisi" offre "Analizza ora"). La sync
   Intervals analizza subito (nessun tag). Il report (`GET /report`) espone gli output tipizzati
   degli agent; il client fa polling solo dopo aver avviato lui la pipeline.
+- **Tag modificati dopo** (pagina attività, modale in modalità `edit`): `PATCH /context` senza
+  `analyze` salva soltanto; la nuova analisi (a pagamento) parte solo da "Aggiorna l'analisi".
+- **Sync all'apertura**: la dashboard lancia una sync se l'ultima (`intervals_synced_at`) ha più
+  di 10'; le corse nuove vengono seguite nella card "Ultima analisi".
 - **Chat** (`/chat`): stateless lato backend; la conversazione vive nel client (`localStorage["bryt-chat"]`,
   ultimi 40 messaggi inviati a ogni turno, vedi `lib/chat.ts`). La `proposed_adjustment` del coach è
   una card "Applica al piano" (`POST /plans/adjust`) / "Non ora": mai applicata senza conferma.
@@ -190,7 +194,7 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
 | GET  | `/api/v1/me`, `/api/v1/me/profile`, `/api/v1/me/calibration` (zone) | 3-4 ✅ |
 | PATCH | `/api/v1/me/profile` (modifica parziale, pagina impostazioni) | 4 ✅ |
 | PUT  | `/api/v1/me/onboarding` (profilo + PB + credenziali Intervals verificate live) | 3 ✅ |
-| POST | `/api/v1/integrations/intervals/sync` | 3 ✅ |
+| POST | `/api/v1/integrations/intervals/sync` (`analyze=false` = import dello storico senza agent, nessun costo LLM) | 3 ✅ |
 | POST | `/api/v1/integrations/intervals/webhook` (pubblico, autenticato dal `secret`) | 3 ✅ |
 | POST | `/api/v1/activities/upload-fit` (201 nuovo / 200 già presente) | 3 ✅ |
 | POST | `/api/v1/plans/generate` → **202** `GENERATING`, job in background; polling `GET /plans/{id}` | 4 ✅ |
@@ -202,7 +206,7 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
 | POST | `/api/v1/chat` (stateless: il client invia la conversazione) | 4 ✅ |
 | GET  | `/api/v1/chat/quota` (messaggi rimasti oggi; `CHAT_DAILY_LIMIT`, default 15) | 5 ✅ |
 | GET  | `/api/v1/activities`, `/{id}`, `/{id}/streams`, `/{id}/report` | 4 ✅ |
-| PATCH | `/api/v1/activities/{id}/context` (tag → rilancia la pipeline) | 4 ✅ |
+| PATCH | `/api/v1/activities/{id}/context` (tag; `?analyze=true` avvia la pipeline, altrimenti solo salvataggio) | 5 ✅ |
 | POST | `/api/v1/activities/{id}/analyze` (sincrona; `?background=true` → 202 + polling del report) | 4-5 ✅ |
 | POST | `/api/v1/activities/upload-fit?analyze=false` (la dashboard raccoglie prima i tag) | 5 ✅ |
 | POST | `/api/v1/agent-runs/{id}/feedback` (👍/👎) | 4 ✅ |
@@ -284,12 +288,18 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
      `file_type == "fit"`. Altrimenti `GET /activity/{id}/fit-file` (FIT rigenerato da Intervals).
    - Tipi importati: `Run`, `TrailRun`, `VirtualRun`. Le attività di origine **Strava** non
      hanno file via API (ToS Strava) → `NO_FILE`.
-   - **Webhook**: configurabili solo per un'app Intervals.icu registrata (OAuth). Con le API key
-     personali il canale automatico è la **sync** (pulsante dashboard / job periodico). Payload
+   - **Sync automatica**: con le API key personali niente webhook → `agents/scheduler.py`
+     `intervals_poll_loop` ogni `INTERVALS_POLL_INTERVAL_S` (900 s; `INTERVALS_POLL_ENABLED`),
+     finestra ultimi 2 giorni, claim atomico su `intervals_synced_at`, analisi subito (il
+     protocollo post-corsa serve ora; con la doppia soglia l'analisi AM arriva prima della PM).
+     Più sync all'apertura della dashboard e pulsante manuale (`services/intervals_sync.sync_user`).
+   - **Webhook**: configurabili solo per un'app Intervals.icu registrata (OAuth). Payload
      `{secret, events:[{athlete_id, type, activity}]}`; eventi `ACTIVITY_UPLOADED`/
      `ACTIVITY_ANALYZED`; rispondere sempre 2xx velocemente (Intervals ritenta), lavoro in
      background. Activity webhook non inviati per attività Strava.
-   - Dedup: `UNIQUE(user_id, source, external_id)` + hash del file; sync idempotente.
+   - Dedup: `UNIQUE(user_id, source, external_id)` + hash del file + **stessa corsa da un altro
+     canale** (inizio registrazione entro ±2', es. export Strava caricato a mano e copia
+     Intervals: byte diversi); sync idempotente.
 2. **Upload manuale `.fit` (fallback universale)**: `.fit`, `.fit.gz` o `.zip` di Garmin
    Connect ("Esporta originale"), Coros, Strava. Stesso parser, stessa pipeline.
 
@@ -297,6 +307,12 @@ Pipeline unica (`services/ingestion.py`): estrazione FIT (`fit_files.py`, decomp
 limitata) → hash/dedup → `fit_parser.parse_fit` (in thread) → file su storage
 (`fit/{user_id}/{sha256}.fit`) → `Activity` + `ActivityStream` (≤ 3000 punti) → collega il
 `Workout` PLANNED dello stesso giorno locale (AM/PM per Double Threshold) → `COMPLETED`.
+
+Superficie (`Activity.surface` + `surface_source`): tag dell'atleta (`USER`) > modalità
+dell'orologio nel `.fit` (`DEVICE`: trail/pista/tapis roulant/strada) > per una "Corsa" generica
+la superficie abituale del profilo (`default_run_surface` ASPHALT/GRAVEL/MIXED →
+`PROFILE_DEFAULT`, probabile); altrimenti `null` (sconosciuta, mai assumere asfalto). Cambiare la
+superficie abituale aggiorna le corse `PROFILE_DEFAULT`/sconosciute, mai quelle `USER`/`DEVICE`.
 
 Serie estratte dal `.fit`: `timestamp, pace, heart_rate, cadence, elevation, ground_contact_time`.
 La cadenza FIT di corsa è in passi per gamba (strides/min): convertita in **spm** (×2).

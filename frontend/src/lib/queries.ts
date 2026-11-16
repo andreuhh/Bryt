@@ -3,7 +3,16 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api, unwrap } from "@/lib/api";
-import type { ChatMessage, ContextTags, Feedback, OnboardingPayload, PlanAdjustment, Surface } from "@/lib/types";
+import { addDays, today } from "@/lib/format";
+import type {
+  ChatMessage,
+  ContextTags,
+  Feedback,
+  OnboardingPayload,
+  PlanAdjustment,
+  ProfileUpdate,
+  Surface,
+} from "@/lib/types";
 
 export const keys = {
   activePlan: ["plan", "active"] as const,
@@ -172,10 +181,19 @@ export function useUploadFit() {
 export function useSaveContext() {
   const invalidate = useInvalidateActivities();
   return useMutation({
-    mutationFn: ({ id, body }: { id: string; body: { surface?: Surface | null; context_tags: ContextTags } }) =>
+    /** analyze: run the agents now (post-upload modal); editing tags later only saves them. */
+    mutationFn: ({
+      id,
+      body,
+      analyze,
+    }: {
+      id: string;
+      body: { surface?: Surface | null; context_tags: ContextTags };
+      analyze: boolean;
+    }) =>
       unwrap(
         api.PATCH("/api/v1/activities/{activity_id}/context", {
-          params: { path: { activity_id: id } },
+          params: { path: { activity_id: id }, query: { analyze } },
           body,
         }),
       ),
@@ -197,7 +215,24 @@ export function useAnalyzeInBackground() {
 export function useIntervalsSync() {
   const invalidate = useInvalidateActivities();
   return useMutation({
-    mutationFn: () => unwrap(api.POST("/api/v1/integrations/intervals/sync", { body: {} })),
+    mutationFn: () => unwrap(api.POST("/api/v1/integrations/intervals/sync", { body: { analyze: true } })),
+    onSuccess: invalidate,
+  });
+}
+
+/** Weeks of history imported once after connecting Intervals.icu (baseline needs 4). */
+export const BACKFILL_WEEKS = 8;
+
+/** History backfill: imports without running the agents (no LLM cost). */
+export function useIntervalsBackfill() {
+  const invalidate = useInvalidateActivities();
+  return useMutation({
+    mutationFn: () =>
+      unwrap(
+        api.POST("/api/v1/integrations/intervals/sync", {
+          body: { oldest: addDays(today(), -BACKFILL_WEEKS * 7), analyze: false },
+        }),
+      ),
     onSuccess: invalidate,
   });
 }
@@ -279,5 +314,18 @@ export function useApplyAdjustment() {
   return useMutation({
     mutationFn: (adjustment: PlanAdjustment) => unwrap(api.POST("/api/v1/plans/adjust", { body: { adjustment } })),
     onSuccess: invalidate,
+  });
+}
+
+/** Partial profile update (settings page). Surface changes also re-label generic runs. */
+export function useUpdateProfile() {
+  const client = useQueryClient();
+  const invalidateActivities = useInvalidateActivities();
+  return useMutation({
+    mutationFn: (body: ProfileUpdate) => unwrap(api.PATCH("/api/v1/me/profile", { body })),
+    onSuccess: (profile, body) => {
+      client.setQueryData(keys.profile, profile);
+      if ("default_run_surface" in body) invalidateActivities();
+    },
   });
 }

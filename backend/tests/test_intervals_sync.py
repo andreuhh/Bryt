@@ -2,7 +2,7 @@
 
 import base64
 import gzip
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 
 import httpx
 import pytest
@@ -10,8 +10,16 @@ from sqlmodel import select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.models import Activity, ActivityStream, TrainingPlan, User, Workout
-from app.models.enums import Methodology, PlanStatus, SessionSlot, WorkoutStatus, WorkoutType
+from app.models.enums import (
+    ActivitySource,
+    Methodology,
+    PlanStatus,
+    SessionSlot,
+    WorkoutStatus,
+    WorkoutType,
+)
 from app.schemas.ingestion import SyncItemStatus
+from app.services.ingestion import ingest_fit
 from app.services.intervals_sync import (
     IntervalsAuthError,
     IntervalsClient,
@@ -23,7 +31,7 @@ from tests.fit_builder import build_fit, synthetic_run
 API_KEY = "user-personal-key"
 START = datetime(2026, 11, 10, 6, 30, tzinfo=UTC)  # 07:30 Europe/Rome
 FIT = build_fit(synthetic_run(40), start=START)
-FIT_GENERATED = build_fit(synthetic_run(30, seed=3), start=START)
+FIT_GENERATED = build_fit(synthetic_run(30, seed=3), start=START + timedelta(hours=10))
 
 REMOTE = [
     {"id": "i1001", "name": "Lungo", "type": "Run", "file_type": "fit", "source": "GARMIN_CONNECT"},
@@ -105,6 +113,25 @@ async def test_sync_is_idempotent(
     assert second.count(SyncItemStatus.ALREADY_PRESENT) == 2
 
 
+async def test_same_run_from_another_channel_is_not_duplicated(
+    session: AsyncSession, user: User, storage: LocalFitStorage
+) -> None:
+    """Manual upload of a Strava export, then the Intervals.icu copy of the same recording:
+    different bytes (another file), same start time → one activity."""
+    manual = await ingest_fit(
+        session,
+        user=user,
+        fit_bytes=build_fit(synthetic_run(40, seed=9), start=START + timedelta(seconds=1)),
+        source=ActivitySource.MANUAL_UPLOAD,
+        storage=storage,
+    )
+    result = await _sync(session, user, storage)
+    lungo = next(i for i in result.items if i.external_id == "i1001")
+    assert lungo.status == SyncItemStatus.ALREADY_PRESENT
+    assert lungo.activity_id == manual.activity.id
+    assert result.count(SyncItemStatus.IMPORTED) == 1  # only the treadmill run (other time)
+
+
 async def test_sync_links_planned_workout(
     session: AsyncSession, user: User, storage: LocalFitStorage
 ) -> None:
@@ -150,3 +177,26 @@ async def test_bad_credentials_raise(
 ) -> None:
     with pytest.raises(IntervalsAuthError):
         await _sync(session, user, storage, api_key="wrong")
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        httpx.Response(500),
+        httpx.Response(429),
+        httpx.Response(200, text="<html>maintenance</html>"),
+    ],
+)
+async def test_unexpected_answers_become_intervals_errors(response: httpx.Response) -> None:
+    """Never an unhandled exception: the API maps IntervalsError to 502 (with CORS headers)."""
+    from app.services.intervals_sync import IntervalsError
+
+    client = IntervalsClient(
+        "i42",
+        API_KEY,
+        base_url="https://intervals.test/api/v1",
+        transport=httpx.MockTransport(lambda _: response),
+    )
+    async with client:
+        with pytest.raises(IntervalsError):
+            await client.get_athlete()

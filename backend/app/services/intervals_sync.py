@@ -6,9 +6,9 @@ original is not a FIT we fall back to /activity/{id}/fit-file (Intervals-generat
 Strava-sourced activities expose no file via the API (Strava ToS) → reported as NO_FILE.
 """
 
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from types import TracebackType
-from typing import Self
+from typing import Any, Self
 
 import httpx
 from sqlmodel import col, select
@@ -84,13 +84,22 @@ class IntervalsClient:
             raise IntervalsAuthError("Intervals.icu rejected the Athlete ID / API Key")
         return response
 
+    @staticmethod
+    def _json(response: httpx.Response) -> Any:
+        """Unexpected statuses / bodies become IntervalsError (→ 502), never an unhandled 500."""
+        if not response.is_success:
+            raise IntervalsError(f"Intervals.icu answered HTTP {response.status_code}")
+        try:
+            return response.json()
+        except ValueError as exc:
+            raise IntervalsError("Intervals.icu answered with a non-JSON body") from exc
+
     async def get_athlete(self) -> dict[str, object]:
         """Cheap call used to validate credentials at connection time."""
         response = await self._get(f"/athlete/{self.athlete_id}")
         if response.status_code == 404:
             raise IntervalsAuthError("Athlete not found on Intervals.icu")
-        response.raise_for_status()
-        data: dict[str, object] = response.json()
+        data: dict[str, object] = self._json(response)
         return data
 
     async def list_activities(self, oldest: date, newest: date) -> list[IntervalsActivity]:
@@ -99,16 +108,37 @@ class IntervalsClient:
             oldest=oldest.isoformat(),
             newest=newest.isoformat(),
         )
-        response.raise_for_status()
-        return [IntervalsActivity.model_validate(item) for item in response.json()]
+        return [IntervalsActivity.model_validate(item) for item in self._json(response)]
 
     async def download_fit(self, activity: IntervalsActivity, max_bytes: int) -> bytes:
         path = "file" if (activity.file_type or "").lower() == "fit" else "fit-file"
         response = await self._get(f"/activity/{activity.id}/{path}")
         if response.status_code in (404, 422) or not response.content:
             raise IntervalsFileUnavailableError("No file available for this activity")
-        response.raise_for_status()
+        if not response.is_success:
+            raise IntervalsError(f"Intervals.icu answered HTTP {response.status_code}")
         return extract_fit_bytes(response.content, max_bytes)
+
+
+async def sync_user(
+    session: AsyncSession,
+    *,
+    user: User,
+    profile: UserLifestyleProfile,
+    storage: FitStorage,
+    oldest: date,
+    newest: date,
+) -> IntervalsSyncResult:
+    """One sync for a connected athlete (button, app open or periodic poll): records when it
+    ran, so the poll and the app can skip athletes synced a moment ago."""
+    async with client_for(profile) as client:
+        result = await sync_intervals_activities(
+            session, user=user, client=client, storage=storage, oldest=oldest, newest=newest
+        )
+    profile.intervals_synced_at = datetime.now(UTC)
+    session.add(profile)
+    await session.commit()
+    return result
 
 
 def client_for(profile: UserLifestyleProfile) -> IntervalsClient:

@@ -2,7 +2,7 @@
 
 import uuid
 from datetime import date, datetime
-from typing import Self
+from typing import Literal, Self
 
 from pydantic import Field, SecretStr, model_validator
 
@@ -17,6 +17,10 @@ from app.models.enums import (
     WorkType,
 )
 from app.schemas.common import ORMModel, StrictModel
+
+# What a generic watch "Run" usually means for this athlete (trail/track/treadmill have their
+# own watch modes, recorded in the .fit)
+RunSurfaceDefault = Literal[Surface.ASPHALT, Surface.GRAVEL, Surface.MIXED]
 
 INTERVALS_ATHLETE_ID_PATTERN = r"^i\d+$"
 
@@ -70,6 +74,7 @@ class _ProfileFields(StrictModel):
     work_type: WorkType
     avg_sleep_hours: float | None = Field(default=None, ge=0, le=14)
     terrain_access: list[Surface] = Field(min_length=1)
+    default_run_surface: RunSurfaceDefault | None = None
     methodology: Methodology = Methodology.TRADITIONAL
     double_sessions_ok: bool
     long_run_day: Weekday | None = None
@@ -128,6 +133,7 @@ class ProfileUpdate(StrictModel):
     work_type: WorkType | None = None
     avg_sleep_hours: float | None = Field(default=None, ge=0, le=14)
     terrain_access: list[Surface] | None = Field(default=None, min_length=1)
+    default_run_surface: RunSurfaceDefault | None = None
     methodology: Methodology | None = None
     intervals_athlete_id: str | None = Field(default=None, pattern=INTERVALS_ATHLETE_ID_PATTERN)
     intervals_api_key: SecretStr | None = None
@@ -155,6 +161,7 @@ class ProfileRead(ORMModel):
     work_type: WorkType
     avg_sleep_hours: float | None
     terrain_access: list[Surface]
+    default_run_surface: Surface | None
     methodology: Methodology
     double_sessions_ok: bool
     long_run_day: Weekday | None
@@ -165,6 +172,7 @@ class ProfileRead(ORMModel):
     coach_notes: str | None
     intervals_athlete_id: str | None
     intervals_connected: bool  # derived; the API key itself is never exposed
+    intervals_synced_at: datetime | None
     updated_at: datetime | None
 
 

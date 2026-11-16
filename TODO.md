@@ -70,3 +70,15 @@ Lettura del sonno da Apple Salute / Google Health Connect: richiede un'app nativ
   reset della password (oggi assente).
 - **Skill Supabase (`supabase/agent-skills`)**: leggerne il contenuto e valutarle al passaggio in
   produzione (database Supabase, RLS, migrazioni, storage dei `.fit`).
+- **Riferimento 28 giorni più intelligente** (`services/history.py`): oggi `data_coverage` LOW scatta
+  anche quando i km bassi sono *reali* (tapering, gara, recupero) e non dati mancanti. Con
+  Intervals.icu collegato e ≥ 8 corse le registrazioni sono complete → copertura sufficiente.
+  Passare agli agent sia il volume abituale (dichiarato / media 8 settimane) sia quello recente,
+  con il contesto (es. gara nelle ultime 4 settimane → scarico e recupero attesi, non calo di forma).
+  Caso reale: NYC Marathon 1/11, ultime 4 settimane 36 km/sett vs 72 abituali.
+- **Webhook Intervals.icu (produzione)**: registrare BRYT come app OAuth su Intervals.icu
+  ("Accedi con Intervals" al posto della API key) → webhook `ACTIVITY_UPLOADED` in tempo reale;
+  il poll ogni 15' resta come rete di sicurezza.
+- **Superficie dal tracciato GPS**: incrociare il percorso con OpenStreetMap (`surface`/
+  `highway` delle strade) per distinguere asfalto e sterrato anche nelle "Corsa" generiche;
+  renderebbe quasi superflua la superficie abituale (`PROFILE_DEFAULT`).

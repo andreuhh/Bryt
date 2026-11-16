@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { useRef, useState } from "react";
 
 import { IconRefresh } from "@/components/icons";
@@ -7,24 +8,17 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { useToast } from "@/components/ui/Toast";
 import { useIntervalsSync, useUploadFit } from "@/lib/queries";
-import type { Activity, SyncResult } from "@/lib/types";
-
-function syncSummary(result: SyncResult): string {
-  const count = (status: string) => result.items.filter((i) => i.status === status).length;
-  const parts = [
-    count("IMPORTED") && `${count("IMPORTED")} importate`,
-    count("ALREADY_PRESENT") && `${count("ALREADY_PRESENT")} già presenti`,
-    count("NO_FILE") && `${count("NO_FILE")} senza file (es. da Strava)`,
-    count("FAILED") && `${count("FAILED")} non riuscite`,
-  ].filter(Boolean);
-  return parts.length ? `Intervals.icu: ${parts.join(", ")}` : "Intervals.icu: nessuna nuova corsa";
-}
+import { syncSummary } from "@/lib/dashboard";
+import type { Activity } from "@/lib/types";
 
 export function UploadCard({
   intervalsConnected,
+  autoSyncing,
   onUploaded,
 }: {
   intervalsConnected: boolean;
+  /** The sync started automatically when the dashboard opened. */
+  autoSyncing: boolean;
   onUploaded: (activity: Activity) => void;
 }) {
   const toast = useToast();
@@ -97,7 +91,7 @@ export function UploadCard({
           variant="secondary"
           size="sm"
           disabled={!intervalsConnected}
-          loading={sync.isPending}
+          loading={sync.isPending || autoSyncing}
           onClick={() =>
             sync.mutate(undefined, {
               onSuccess: (r) => toast(syncSummary(r), "success"),
@@ -109,7 +103,12 @@ export function UploadCard({
           Sincronizza Intervals.icu
         </Button>
         {!intervalsConnected && (
-          <span className="text-xs text-fg-subtle">Collega Intervals.icu dal profilo per importare in automatico.</span>
+          <span className="text-xs text-fg-subtle">
+            <Link href="/settings" className="underline underline-offset-4 hover:text-fg">
+              Collega Intervals.icu
+            </Link>{" "}
+            per importare le corse dall&apos;orologio.
+          </span>
         )}
       </div>
     </Card>

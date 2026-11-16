@@ -117,6 +117,10 @@ lsof -nP -iTCP:3000 -sTCP:LISTEN
 
 **Database connection error** — Docker Desktop is closed or the database is down (command 1).
 
+**The backend stops at startup with "ENCRYPTION_KEY is missing"** — set `ENCRYPTION_KEY` in
+`backend/.env` (generation command in "First-time setup"). Never change it afterwards: it decrypts
+the Intervals.icu keys saved in the database.
+
 ---
 
 ## Checks and tests

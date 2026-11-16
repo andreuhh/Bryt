@@ -23,6 +23,18 @@ export type PbDraft = {
   event_name: string;
 };
 
+/** Usual surface of a generic watch "Run" (trail, track and treadmill have their own modes). */
+export type RunSurface = "ASPHALT" | "GRAVEL" | "MIXED";
+export const RUN_SURFACE_OPTIONS: { value: RunSurface; label: string }[] = [
+  { value: "ASPHALT", label: "Asfalto" },
+  { value: "GRAVEL", label: "Sterrato" },
+  { value: "MIXED", label: "Misto" },
+];
+export const RUN_SURFACE_HINT =
+  "Asfalto: strade e ciclabili. Sterrato: ghiaia, campagna, parchi. Misto: un po' e un po'. Il trail e la pista li riconosciamo dalla modalità dell'orologio.";
+const isRunSurface = (s: Surface | null | undefined): s is RunSurface =>
+  s === "ASPHALT" || s === "GRAVEL" || s === "MIXED";
+
 export type Draft = {
   display_name: string;
   background: AthleteBackground | "";
@@ -44,6 +56,7 @@ export type Draft = {
   work_type: "SEDENTARY" | "PHYSICAL" | "";
   avg_sleep_hours: string;
   terrain_access: Surface[];
+  default_run_surface: RunSurface | "";
   weekly_volume_km: string;
   peak_volume_km: string;
   strength_setting: "NONE" | "HOME" | "GYM" | "";
@@ -109,6 +122,7 @@ export const EMPTY_DRAFT: Draft = {
   work_type: "",
   avg_sleep_hours: "",
   terrain_access: [],
+  default_run_surface: "",
   weekly_volume_km: "",
   peak_volume_km: "",
   strength_setting: "",
@@ -167,6 +181,7 @@ export function fromProfile(profile: Profile, user: User | undefined): Draft {
     work_type: profile.work_type,
     avg_sleep_hours: str(profile.avg_sleep_hours),
     terrain_access: profile.terrain_access,
+    default_run_surface: isRunSurface(profile.default_run_surface) ? profile.default_run_surface : "",
     weekly_volume_km: str(profile.weekly_volume_km),
     peak_volume_km: str(profile.peak_volume_km),
     strength_setting: profile.strength_setting,
@@ -204,6 +219,7 @@ export function toPayload(d: Draft): OnboardingPayload {
       available_days: d.available_days,
       work_type: d.work_type as "SEDENTARY",
       avg_sleep_hours: num(d.avg_sleep_hours),
+      default_run_surface: d.default_run_surface || null,
       terrain_access: d.terrain_access,
       methodology: d.methodology,
       double_sessions_ok: d.double_sessions_ok === "yes",
@@ -267,6 +283,7 @@ export function validateStep(step: number, d: Draft, savedPbs: PersonalBest[], t
     if (d.available_days.length === 0) e.available_days = "Scegli almeno un giorno";
     if (!d.work_type) e.work_type = "Scegli il tipo di lavoro";
     if (d.terrain_access.length === 0) e.terrain_access = "Scegli almeno un terreno";
+    if (!d.default_run_surface) e.default_run_surface = "Su cosa corri di solito?";
     if (!inRange(d.avg_sleep_hours, 0, 14)) e.avg_sleep_hours = "Valore non valido";
   }
   if (step === 4) {

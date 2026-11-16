@@ -23,7 +23,7 @@ from app.agents.pipeline import PipelineLauncher, get_pipeline_launcher, run_pos
 from app.api.deps import CurrentUser, SessionDep
 from app.core.config import get_settings
 from app.models import Activity, ActivityStream, AgentExecutionLog, User
-from app.models.enums import ActivitySource, AgentName, AgentTrigger
+from app.models.enums import ActivitySource, AgentName, AgentTrigger, SurfaceSource
 from app.schemas.activity import ActivityContextUpdate, ActivityRead, ActivityStreamRead
 from app.schemas.agent_log import (
     ActivityReport,
@@ -148,16 +148,21 @@ async def update_context(
     session: SessionDep,
     background: BackgroundTasks,
     launch_pipeline: LauncherDep,
+    analyze: bool = False,
 ) -> ActivityRead:
-    """Post-activity quick tags (surface, caffeine, jet lag…). Re-runs the agent pipeline."""
+    """Post-activity quick tags (surface, caffeine, jet lag…). `analyze=true` runs the agent
+    pipeline (first analysis after an upload); editing tags later never re-spends on its own:
+    the athlete asks for a new analysis explicitly (POST /analyze)."""
     activity = await _owned(session, user, activity_id)
     if body.surface is not None:
         activity.surface = body.surface
+        activity.surface_source = SurfaceSource.USER
     activity.context_tags = body.context_tags.model_dump(mode="json", exclude_none=True)
     session.add(activity)
     await session.commit()
     await session.refresh(activity)
-    background.add_task(launch_pipeline, user.id, activity.id)
+    if analyze:
+        background.add_task(launch_pipeline, user.id, activity.id)
     return ActivityRead.model_validate(activity)
 
 

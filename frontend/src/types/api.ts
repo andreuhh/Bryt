@@ -245,7 +245,9 @@ export interface paths {
         head?: never;
         /**
          * Update Context
-         * @description Post-activity quick tags (surface, caffeine, jet lag…). Re-runs the agent pipeline.
+         * @description Post-activity quick tags (surface, caffeine, jet lag…). `analyze=true` runs the agent
+         *     pipeline (first analysis after an upload); editing tags later never re-spends on its own:
+         *     the athlete asks for a new analysis explicitly (POST /analyze).
          */
         patch: operations["update_context_api_v1_activities__activity_id__context_patch"];
         trace?: never;
@@ -589,6 +591,7 @@ export interface components {
             elevation_loss_m: number | null;
             computed_metrics: components["schemas"]["ComputedMetrics"];
             surface: components["schemas"]["Surface"] | null;
+            surface_source: components["schemas"]["SurfaceSource"] | null;
             context_tags: components["schemas"]["ContextTags"];
         };
         /**
@@ -1008,6 +1011,12 @@ export interface components {
              * @description Default: today
              */
             newest?: string | null;
+            /**
+             * Analyze
+             * @description False = history backfill: import without running the agents (no LLM cost)
+             * @default true
+             */
+            analyze: boolean;
         };
         /** IntervalsSyncResult */
         IntervalsSyncResult: {
@@ -1394,6 +1403,8 @@ export interface components {
             avg_sleep_hours?: number | null;
             /** Terrain Access */
             terrain_access: components["schemas"]["Surface"][];
+            /** Default Run Surface */
+            default_run_surface?: ("ASPHALT" | "GRAVEL" | "MIXED") | null;
             /** @default TRADITIONAL */
             methodology: components["schemas"]["Methodology"];
             /** Double Sessions Ok */
@@ -1458,6 +1469,7 @@ export interface components {
             avg_sleep_hours: number | null;
             /** Terrain Access */
             terrain_access: components["schemas"]["Surface"][];
+            default_run_surface: components["schemas"]["Surface"] | null;
             methodology: components["schemas"]["Methodology"];
             /** Double Sessions Ok */
             double_sessions_ok: boolean;
@@ -1474,6 +1486,8 @@ export interface components {
             intervals_athlete_id: string | null;
             /** Intervals Connected */
             intervals_connected: boolean;
+            /** Intervals Synced At */
+            intervals_synced_at: string | null;
             /** Updated At */
             updated_at: string | null;
         };
@@ -1523,6 +1537,8 @@ export interface components {
             avg_sleep_hours?: number | null;
             /** Terrain Access */
             terrain_access?: components["schemas"]["Surface"][] | null;
+            /** Default Run Surface */
+            default_run_surface?: ("ASPHALT" | "GRAVEL" | "MIXED") | null;
             methodology?: components["schemas"]["Methodology"] | null;
             /** Intervals Athlete Id */
             intervals_athlete_id?: string | null;
@@ -1621,6 +1637,12 @@ export interface components {
          * @enum {string}
          */
         Surface: "ASPHALT" | "TRAIL" | "TRACK" | "TREADMILL" | "GRAVEL" | "MIXED";
+        /**
+         * SurfaceSource
+         * @description Where an activity's surface comes from (how much the agents can trust it).
+         * @enum {string}
+         */
+        SurfaceSource: "USER" | "DEVICE" | "PROFILE_DEFAULT";
         /** SyncItem */
         SyncItem: {
             /** External Id */
@@ -2343,7 +2365,9 @@ export interface operations {
     };
     update_context_api_v1_activities__activity_id__context_patch: {
         parameters: {
-            query?: never;
+            query?: {
+                analyze?: boolean;
+            };
             header?: {
                 "x-dev-user-id"?: string | null;
             };

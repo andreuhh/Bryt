@@ -6,7 +6,16 @@ import { DurationInput, Field, MultiPills, NumberInput, TextArea, TextInput } fr
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { SURFACE_LABEL } from "@/lib/dashboard";
 import { formatLong, km as kmFmt } from "@/lib/format";
-import { DISTANCES, type Draft, type Errors, newPb, type PbDraft, WEEKDAYS } from "@/lib/onboarding";
+import {
+  DISTANCES,
+  type Draft,
+  type Errors,
+  newPb,
+  type PbDraft,
+  RUN_SURFACE_HINT,
+  RUN_SURFACE_OPTIONS,
+  WEEKDAYS,
+} from "@/lib/onboarding";
 import type { PersonalBest, Surface } from "@/lib/types";
 
 export type StepProps = { d: Draft; set: (patch: Partial<Draft>) => void; errors: Errors };
@@ -242,6 +251,19 @@ export function StepLifestyle({ d, set, errors }: StepProps) {
       </div>
       <Field label="Terreni a cui hai accesso" required error={errors.terrain_access}>
         <MultiPills label="Terreni" options={surfaceOptions} value={d.terrain_access} onChange={(terrain_access) => set({ terrain_access })} />
+      </Field>
+      <Field
+        label="Quando scegli “Corsa” sull'orologio, di solito corri su"
+        required
+        error={errors.default_run_surface}
+        hint={RUN_SURFACE_HINT}
+      >
+        <SegmentedControl
+          label="Superficie abituale"
+          value={d.default_run_surface}
+          onChange={(default_run_surface) => set({ default_run_surface })}
+          options={RUN_SURFACE_OPTIONS}
+        />
       </Field>
     </div>
   );

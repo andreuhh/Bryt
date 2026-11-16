@@ -32,34 +32,42 @@ function nearestCaffeine(mg: number | null | undefined): string {
  * Post-activity quick tags. Saving starts the agent analysis with the full context;
  * skipping (or closing) starts it without tags. Either way it runs exactly once.
  */
+/**
+ * "analyze": right after an upload, saving starts the (single) agent analysis.
+ * "edit": tags changed later are only saved: a new analysis is the athlete's explicit choice.
+ */
+type Mode = "analyze" | "edit";
+
 export function ContextTagsModal({
   activity,
   onClose,
-  onAnalysisStarted,
+  onDone,
+  mode = "analyze",
   title = "Com'è andata?",
 }: {
   activity: Activity | null;
   onClose: () => void;
-  onAnalysisStarted: (activityId: string) => void;
+  onDone: (activityId: string) => void;
+  mode?: Mode;
   title?: string;
 }) {
   return (
     <Modal open={activity !== null} onClose={onClose} title={title}>
-      {activity && (
-        <TagsForm key={activity.id} activity={activity} onClose={onClose} onAnalysisStarted={onAnalysisStarted} />
-      )}
+      {activity && <TagsForm key={activity.id} activity={activity} mode={mode} onClose={onClose} onDone={onDone} />}
     </Modal>
   );
 }
 
 function TagsForm({
   activity,
+  mode,
   onClose,
-  onAnalysisStarted,
+  onDone,
 }: {
   activity: Activity;
+  mode: Mode;
   onClose: () => void;
-  onAnalysisStarted: (id: string) => void;
+  onDone: (id: string) => void;
 }) {
   const toast = useToast();
   const save = useSaveContext();
@@ -80,7 +88,7 @@ function TagsForm({
   const [notes, setNotes] = useState(saved.notes ?? "");
 
   const finish = () => {
-    onAnalysisStarted(activity.id);
+    onDone(activity.id);
     onClose();
   };
 
@@ -98,10 +106,13 @@ function TagsForm({
       notes: notes.trim() || null,
     };
     save.mutate(
-      { id: activity.id, body: { surface, context_tags: tags } },
+      { id: activity.id, body: { surface, context_tags: tags }, analyze: mode === "analyze" },
       {
         onSuccess: () => {
-          toast("Contesto salvato: gli agent stanno analizzando la corsa", "success");
+          toast(
+            mode === "analyze" ? "Contesto salvato: gli agent stanno analizzando la corsa" : "Tag salvati",
+            "success",
+          );
           finish();
         },
         onError: (e) => toast(e.message, "error"),
@@ -238,11 +249,13 @@ function TagsForm({
 
       <div className="flex flex-col gap-2 sm:flex-row-reverse">
         <Button onClick={submit} loading={save.isPending} disabled={skip.isPending}>
-          Salva e analizza
+          {mode === "analyze" ? "Salva e analizza" : "Salva"}
         </Button>
-        <Button variant="ghost" onClick={skipTags} loading={skip.isPending} disabled={save.isPending}>
-          Salta, analizza senza tag
-        </Button>
+        {mode === "analyze" && (
+          <Button variant="ghost" onClick={skipTags} loading={skip.isPending} disabled={save.isPending}>
+            Salta, analizza senza tag
+          </Button>
+        )}
       </div>
     </div>
   );

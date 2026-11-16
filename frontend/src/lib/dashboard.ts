@@ -1,6 +1,6 @@
 /** Pure helpers for the dashboard (no React). */
 
-import type { Activity, NutritionRecovery, Workout } from "@/lib/types";
+import type { Activity, NutritionRecovery, SyncResult, Workout } from "@/lib/types";
 
 const localDay = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Rome" });
 
@@ -38,3 +38,25 @@ export const SURFACE_LABEL = {
   TREADMILL: "Tapis roulant",
   MIXED: "Misto",
 } as const;
+
+export function syncCounts(result: SyncResult) {
+  const count = (status: string) => result.items.filter((i) => i.status === status).length;
+  return {
+    imported: count("IMPORTED"),
+    present: count("ALREADY_PRESENT"),
+    noFile: count("NO_FILE"),
+    failed: count("FAILED"),
+  };
+}
+
+/** Toast text for an Intervals.icu sync. */
+export function syncSummary(result: SyncResult): string {
+  const c = syncCounts(result);
+  const parts = [
+    c.imported && `${c.imported} importate`,
+    c.present && `${c.present} già presenti`,
+    c.noFile && `${c.noFile} senza file (es. da Strava)`,
+    c.failed && `${c.failed} non riuscite`,
+  ].filter(Boolean);
+  return parts.length ? `Intervals.icu: ${parts.join(", ")}` : "Intervals.icu: nessuna nuova corsa";
+}

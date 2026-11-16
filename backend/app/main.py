@@ -5,16 +5,23 @@ from collections.abc import AsyncIterator
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.agents.scheduler import scheduler_loop
+from app.agents.scheduler import intervals_poll_loop, scheduler_loop
 from app.api.v1.router import api_router
 from app.core.config import get_settings
+from app.core.security import check_encryption_key
 
 
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    task = asyncio.create_task(scheduler_loop()) if get_settings().scheduler_enabled else None
+    check_encryption_key()
+    settings = get_settings()
+    tasks = []
+    if settings.scheduler_enabled:
+        tasks.append(asyncio.create_task(scheduler_loop()))
+    if settings.intervals_poll_enabled:
+        tasks.append(asyncio.create_task(intervals_poll_loop()))
     yield
-    if task is not None:
+    for task in tasks:
         task.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await task
