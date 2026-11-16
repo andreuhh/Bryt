@@ -35,6 +35,7 @@ class Call:
     effort: str
     cached_prefix: str | None = None
     model: str | None = None
+    cache_prefix: bool = True
 
     @property
     def context(self) -> dict[str, Any]:
@@ -67,8 +68,9 @@ class FakeLLM:
         max_tokens: int,
         cached_prefix: str | None = None,
         model: str | None = None,
+        cache_prefix: bool = True,
     ) -> LLMResult[T]:
-        call = Call(output_model, system, prompt, effort, cached_prefix, model)
+        call = Call(output_model, system, prompt, effort, cached_prefix, model, cache_prefix)
         self.calls.append(call)
         item = self.responses[output_model].popleft()
         if isinstance(item, Exception):

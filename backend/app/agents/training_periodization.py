@@ -503,6 +503,7 @@ async def adjust_plan(
         "according to adjustment_request.",
         context=variable,
         stable_context=ctx,
+        cache_prefix=False,  # one-shot: no other call re-reads this prefix
         output_model=PlanAdjustmentOutput,
         effort="medium",
         max_tokens=16000,

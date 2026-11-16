@@ -67,6 +67,7 @@ class LLMClient(Protocol):
         max_tokens: int,
         cached_prefix: str | None = None,
         model: str | None = None,
+        cache_prefix: bool = True,
     ) -> LLMResult[T]: ...
 
 
@@ -93,15 +94,19 @@ class AnthropicLLM:
         max_tokens: int,
         cached_prefix: str | None = None,
         model: str | None = None,
+        cache_prefix: bool = True,
     ) -> LLMResult[T]:
         model = model or self._model
         # Cache breakpoint right after the stable prefix (system + athlete context): calls of
-        # the same run (plan blocks, pipeline agents) re-read it instead of re-writing it.
+        # the same run (plan blocks, chat turns) re-read it instead of re-writing it. Without
+        # re-reads a cache write only costs more (1.25x input), hence `cache_prefix=False`.
         content: list[BetaTextBlockParam] = []
-        if cached_prefix:
+        if cached_prefix and cache_prefix:
             content.append(
                 {"type": "text", "text": cached_prefix, "cache_control": {"type": "ephemeral"}}
             )
+        elif cached_prefix:
+            content.append({"type": "text", "text": cached_prefix})
         content.append({"type": "text", "text": prompt})
         message: BetaMessageParam = {"role": "user", "content": content}
         fallback: dict[str, Any] = (

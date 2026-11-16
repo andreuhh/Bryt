@@ -48,6 +48,7 @@ async def analyze_activity(
         task="Analyze the activity in the context.",
         context=variable,
         stable_context=ctx,
+        cache_prefix=False,  # one-shot: no other call re-reads this prefix
         output_model=MechanicalLoadOutput,
         effort="medium",
         max_tokens=16000,

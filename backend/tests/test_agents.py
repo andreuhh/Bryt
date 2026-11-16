@@ -268,6 +268,7 @@ async def test_build_plan_covers_every_day_with_detail_levels(
     block_calls = llm.calls_for(BlockWorkoutsOutput)
     assert block_calls[0].context["previous_block_last_week"] == []
     assert len(block_calls[1].context["previous_block_last_week"]) == 7  # continuity
+    assert all(c.cache_prefix for c in block_calls)  # blocks re-read the cached skeleton
 
 
 async def test_build_plan_repairs_missing_day(session: AsyncSession, athlete: User) -> None:
@@ -428,6 +429,28 @@ async def test_pipeline_full_cascade_with_adjustment(
         AgentName.NUTRITION_RECOVERY: settings.nutrition_recovery_model,
     }
     assert llm.calls_for(NutritionRecoveryOutput)[0].model == settings.nutrition_recovery_model
+    # One-shot calls skip the cache write (nobody re-reads their prefix)
+    for output_model in (MechanicalLoadOutput, PlanAdjustmentOutput, NutritionRecoveryOutput):
+        assert llm.calls_for(output_model)[0].cache_prefix is False
+    # Cost from the logged tokens (FakeLLM: 100 input, 50 output)
+    from app.agents.pricing import PRICES
+
+    haiku = PRICES[settings.nutrition_recovery_model]
+    nutrition_log = next(log for log in logs if log.agent_name == AgentName.NUTRITION_RECOVERY)
+    assert nutrition_log.cost_usd == pytest.approx((100 * haiku.input + 50 * haiku.output) / 1e6)
+
+
+def test_cost_is_unknown_for_unpriced_models() -> None:
+    from app.agents.pricing import cost_usd
+
+    tokens = {
+        "input_tokens": 1_000_000,
+        "output_tokens": None,
+        "cache_creation_input_tokens": None,
+        "cache_read_input_tokens": 1_000_000,
+    }
+    assert cost_usd("claude-opus-5-5", **tokens) == pytest.approx(4.2)
+    assert cost_usd("fake-model", **tokens) is None
 
 
 def test_model_for_falls_back_to_default_model() -> None:

@@ -20,6 +20,8 @@ docker-compose.yml   PostgreSQL 16 locale (prod: Supabase-compatibile)
 ### Comandi
 `.venv/bin/python -m scripts.recompute_metrics [--user <uuid>]` ricalcola `computed_metrics`
 dai `.fit` salvati dopo una modifica all'analisi deterministica.
+`.venv/bin/python -m scripts.agent_costs [--user <uuid>] [--months 3]` spesa Claude per utente,
+mese e agent (da `agent_execution_logs.cost_usd`).
 
 ```bash
 docker compose up -d db                                   # Postgres locale
@@ -155,7 +157,7 @@ npm run build && npm run lint
 | `activities` | dedup `UNIQUE(user_id, source, external_id)` e `UNIQUE(user_id, fit_sha256)`; `context_tags` JSONB = `ContextTags` |
 | `activity_streams` | serie temporali 1:1 con activity, array allineati su `elapsed_s` |
 | `daily_wellness` | check-in mattutino: `UNIQUE(user_id, day)`, `sleep_hours` (fasce: 5 = ≤5, 9 = 9+), `feeling` 1-5; entrambi facoltativi (mancante = sconosciuto) |
-| `agent_execution_logs` | input/output JSON, `pipeline_run_id` per la cascata, feedback 👍/👎 |
+| `agent_execution_logs` | input/output JSON, `pipeline_run_id` per la cascata, token e `cost_usd`, feedback 👍/👎 |
 
 Regole:
 - Tabelle in `app/models/`, mixin in `base.py` (`IdMixin`, `TimestampMixin`, `TenantMixin`).
@@ -240,7 +242,10 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
   per i blocchi del piano anche lo scheletro) con breakpoint `cache_control`, poi task +
   `<context>` variabile. Chiamate della stessa esecuzione rileggono il prefisso. JSON con
   chiavi ordinate (byte-identico). Nel log: `input_tokens`, `cache_creation_input_tokens`,
-  `cache_read_input_tokens`, `output_tokens` (prezzi diversi).
+  `cache_read_input_tokens`, `output_tokens` (prezzi diversi) e `cost_usd` (`agents/pricing.py`,
+  listino per modello: aggiornarlo se cambiano prezzi o modelli). Le chiamate one-shot
+  (analisi meccanica, nutrizione, adattamento del piano) passano `cache_prefix=False`: nessuno
+  rilegge il loro prefisso, la scrittura in cache (1,25× l'input) sarebbe solo un costo.
 - `context.py`: viste read-only dello shared state (mai la API key Intervals).
 - `pipeline.py`: cascata post-attività con `pipeline_run_id` condiviso. Lanciata in
   background (`get_pipeline_launcher`, disattivabile con `AGENTS_ENABLED=false`) dopo upload,
