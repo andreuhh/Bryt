@@ -92,8 +92,13 @@ npm run build && npm run lint
   Chiudere la modale non avvia nulla (la card "Ultima analisi" offre "Analizza ora"). La sync
   Intervals analizza subito (nessun tag). Il report (`GET /report`) espone gli output tipizzati
   degli agent; il client fa polling solo dopo aver avviato lui la pipeline.
-- **Tag modificati dopo** (pagina attività, modale in modalità `edit`): `PATCH /context` senza
-  `analyze` salva soltanto; la nuova analisi (a pagamento) parte solo da "Aggiorna l'analisi".
+- **Tag modificati dopo** (pagina attività, modale in modalità `edit`): "Salva" è disattivato se
+  nulla cambia (confronto per valore); salvare rifà l'analisi (`PATCH /context?analyze=true`)
+  finché il tetto lo consente, poi salva soltanto. La superficie è inviata solo se l'atleta la
+  cambia (altrimenti una superficie `PROFILE_DEFAULT` diventerebbe `USER`, cioè "certa").
+- **Tetto analisi per corsa**: `MAX_ANALYSES_PER_ACTIVITY` (default 2 = prima analisi + una
+  rianalisi) sulle analisi richieste dall'atleta (`/analyze`, `PATCH /context?analyze=true` → 429
+  oltre il tetto); `GET /report` espone `analyses_left`. Le analisi fallite non contano.
 - **Sync all'apertura**: la dashboard lancia una sync se l'ultima (`intervals_synced_at`) ha più
   di 10'; le corse nuove vengono seguite nella card "Ultima analisi".
 - **Chat** (`/chat`): stateless lato backend; la conversazione vive nel client (`localStorage["bryt-chat"]`,

@@ -606,6 +606,11 @@ export interface components {
             activity_id: string;
             /** Pipeline Run Id */
             pipeline_run_id: string | null;
+            /**
+             * Analyses Left
+             * @description Analyses the athlete can still request (cost cap)
+             */
+            analyses_left: number;
             mechanical_load?: components["schemas"]["MechanicalLoadRun"] | null;
             plan_adjustment?: components["schemas"]["PlanAdjustmentRun"] | null;
             nutrition_recovery?: components["schemas"]["NutritionRecoveryRun"] | null;

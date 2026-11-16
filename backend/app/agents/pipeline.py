@@ -12,6 +12,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from zoneinfo import ZoneInfo
 
+from sqlmodel import func, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.agents.context import MissingProfileError, local_today
@@ -21,8 +22,8 @@ from app.agents.nutrition_recovery import recommend
 from app.agents.training_periodization import NoActivePlanError, adjust_plan
 from app.core.config import get_settings
 from app.core.database import SessionFactory
-from app.models import Activity, User
-from app.models.enums import AgentTrigger
+from app.models import Activity, AgentExecutionLog, User
+from app.models.enums import AgentName, AgentRunStatus, AgentTrigger
 from app.schemas.agents import MechanicalLoadOutput, NutritionRecoveryOutput, PlanAdjustmentOutput
 from app.services.workouts import revert_activity_adjustments
 
@@ -90,6 +91,23 @@ async def run_post_activity_pipeline(
 
 
 PipelineLauncher = Callable[[uuid.UUID, uuid.UUID], Awaitable[None]]
+
+
+async def analyses_left(session: AsyncSession, user_id: uuid.UUID, activity_id: uuid.UUID) -> int:
+    """Cost cap per activity: completed analyses (a successful load assessment = one run)
+    against MAX_ANALYSES_PER_ACTIVITY. Failed runs don't count."""
+    done = (
+        await session.exec(
+            select(func.count(func.distinct(AgentExecutionLog.pipeline_run_id))).where(
+                AgentExecutionLog.user_id == user_id,
+                AgentExecutionLog.activity_id == activity_id,
+                AgentExecutionLog.trigger == AgentTrigger.POST_ACTIVITY,
+                AgentExecutionLog.agent_name == AgentName.MECHANICAL_LOAD,
+                AgentExecutionLog.status == AgentRunStatus.SUCCESS,
+            )
+        )
+    ).one()
+    return max(get_settings().max_analyses_per_activity - done, 0)
 
 
 async def run_pipeline_in_background(user_id: uuid.UUID, activity_id: uuid.UUID) -> None:

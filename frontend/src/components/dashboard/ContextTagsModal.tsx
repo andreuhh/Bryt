@@ -7,13 +7,12 @@ import { Modal } from "@/components/ui/Modal";
 import { Pill } from "@/components/ui/Pill";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { useToast } from "@/components/ui/Toast";
-import { SURFACE_LABEL } from "@/lib/dashboard";
+import { activityDay, SURFACE_LABEL } from "@/lib/dashboard";
 import { formatDay, km } from "@/lib/format";
-import { activityDay } from "@/lib/dashboard";
 import { useAnalyzeInBackground, useSaveContext } from "@/lib/queries";
 import type { Activity, ContextTags, Surface } from "@/lib/types";
 
-const SURFACES: Surface[] = ["ASPHALT", "GRAVEL", "TRAIL", "TRACK", "TREADMILL"];
+const SURFACES: Surface[] = ["ASPHALT", "GRAVEL", "MIXED", "TRAIL", "TRACK", "TREADMILL"];
 const CAFFEINE = [
   { value: "0", label: "No" },
   { value: "80", label: "1 caffè" },
@@ -33,8 +32,9 @@ function nearestCaffeine(mg: number | null | undefined): string {
  * skipping (or closing) starts it without tags. Either way it runs exactly once.
  */
 /**
- * "analyze": right after an upload, saving starts the (single) agent analysis.
- * "edit": tags changed later are only saved: a new analysis is the athlete's explicit choice.
+ * "analyze": right after an upload, saving (or skipping) starts the first agent analysis.
+ * "edit": from the activity page; saving a change re-runs the analysis while the per-activity
+ * cap allows it (analysesLeft), otherwise the tags are only saved.
  */
 type Mode = "analyze" | "edit";
 
@@ -43,17 +43,29 @@ export function ContextTagsModal({
   onClose,
   onDone,
   mode = "analyze",
+  analysesLeft = 1,
   title = "Com'è andata?",
 }: {
   activity: Activity | null;
   onClose: () => void;
-  onDone: (activityId: string) => void;
+  /** analyzing: whether saving started an analysis (the page can follow it) */
+  onDone: (activityId: string, analyzing: boolean) => void;
   mode?: Mode;
+  analysesLeft?: number;
   title?: string;
 }) {
   return (
     <Modal open={activity !== null} onClose={onClose} title={title}>
-      {activity && <TagsForm key={activity.id} activity={activity} mode={mode} onClose={onClose} onDone={onDone} />}
+      {activity && (
+        <TagsForm
+          key={activity.id}
+          activity={activity}
+          mode={mode}
+          analysesLeft={analysesLeft}
+          onClose={onClose}
+          onDone={onDone}
+        />
+      )}
     </Modal>
   );
 }
@@ -61,13 +73,15 @@ export function ContextTagsModal({
 function TagsForm({
   activity,
   mode,
+  analysesLeft,
   onClose,
   onDone,
 }: {
   activity: Activity;
   mode: Mode;
+  analysesLeft: number;
   onClose: () => void;
-  onDone: (id: string) => void;
+  onDone: (id: string, analyzing: boolean) => void;
 }) {
   const toast = useToast();
   const save = useSaveContext();
@@ -75,7 +89,8 @@ function TagsForm({
   // Pre-filled with what was saved before (editing from the activity page)
   const saved = activity.context_tags;
   const str = (v: number | null | undefined) => (v === null || v === undefined ? "" : String(v));
-  const [surface, setSurface] = useState<Surface>(activity.surface ?? "ASPHALT");
+  // Unknown stays unselected: only a surface the athlete actually picks is sent (as certain)
+  const [surface, setSurface] = useState<Surface | null>(activity.surface);
   const [sleepHours, setSleepHours] = useState(str(saved.sleep_hours_prev_night));
   const [sleepQuality, setSleepQuality] = useState(str(saved.sleep_quality));
   const [caffeine, setCaffeine] = useState<string>(nearestCaffeine(saved.caffeine_mg));
@@ -87,33 +102,41 @@ function TagsForm({
   const [unwell, setUnwell] = useState(saved.feeling_unwell ?? false);
   const [notes, setNotes] = useState(saved.notes ?? "");
 
-  const finish = () => {
-    onDone(activity.id);
+  const finish = (analyzing: boolean) => {
+    onDone(activity.id, analyzing);
     onClose();
   };
 
+  const tags = (): ContextTags => ({
+    sleep_hours_prev_night: sleepHours ? Number(sleepHours) : null,
+    sleep_quality: sleepQuality ? Number(sleepQuality) : null,
+    caffeine_mg: Number(caffeine) || null,
+    caffeine_minutes_before: Number(caffeine) && caffeineBefore ? Number(caffeineBefore) : null,
+    rpe,
+    heat,
+    travelled_last_48h: travel,
+    jet_lag_hours: travel && jetLag ? Number(jetLag) : null,
+    feeling_unwell: unwell,
+    notes: notes.trim() || null,
+  });
+  // Compared by value: changing something and putting it back disables "save" again
+  const snapshot = JSON.stringify([surface, tags()]);
+  const [initial] = useState(snapshot);
+  const changed = snapshot !== initial;
+  const analyze = mode === "analyze" || analysesLeft > 0;
+
   const submit = () => {
-    const tags: ContextTags = {
-      sleep_hours_prev_night: sleepHours ? Number(sleepHours) : null,
-      sleep_quality: sleepQuality ? Number(sleepQuality) : null,
-      caffeine_mg: Number(caffeine) || null,
-      caffeine_minutes_before: Number(caffeine) && caffeineBefore ? Number(caffeineBefore) : null,
-      rpe,
-      heat,
-      travelled_last_48h: travel,
-      jet_lag_hours: travel && jetLag ? Number(jetLag) : null,
-      feeling_unwell: unwell,
-      notes: notes.trim() || null,
-    };
+    const surfaceChanged = surface !== null && surface !== activity.surface;
     save.mutate(
-      { id: activity.id, body: { surface, context_tags: tags }, analyze: mode === "analyze" },
+      {
+        id: activity.id,
+        body: { surface: surfaceChanged ? surface : null, context_tags: tags() },
+        analyze,
+      },
       {
         onSuccess: () => {
-          toast(
-            mode === "analyze" ? "Contesto salvato: gli agent stanno analizzando la corsa" : "Tag salvati",
-            "success",
-          );
-          finish();
+          toast(analyze ? "Contesto salvato: il coach sta analizzando la corsa" : "Tag salvati", "success");
+          finish(analyze);
         },
         onError: (e) => toast(e.message, "error"),
       },
@@ -124,7 +147,7 @@ function TagsForm({
     skip.mutate(activity.id, {
       onSuccess: () => {
         toast("Analisi avviata senza tag", "neutral");
-        finish();
+        finish(true);
       },
       onError: (e) => toast(e.message, "error"),
     });
@@ -236,7 +259,7 @@ function TagsForm({
         )}
       </Field>
 
-      <Field label="Note (facoltative)">
+      <Field label="Note">
         <textarea
           value={notes}
           onChange={(e) => setNotes(e.target.value)}
@@ -247,9 +270,20 @@ function TagsForm({
         />
       </Field>
 
+      {mode === "edit" && (
+        <p className="text-xs text-fg-subtle">
+          {analyze
+            ? "Salvando, il coach rifà l'analisi con i nuovi dati. Puoi aggiornarla una volta per corsa."
+            : "Hai già aggiornato l'analisi di questa corsa: i tag vengono salvati, l'analisi resta quella attuale."}
+        </p>
+      )}
       <div className="flex flex-col gap-2 sm:flex-row-reverse">
-        <Button onClick={submit} loading={save.isPending} disabled={skip.isPending}>
-          {mode === "analyze" ? "Salva e analizza" : "Salva"}
+        <Button
+          onClick={submit}
+          loading={save.isPending}
+          disabled={skip.isPending || (mode === "edit" && !changed)}
+        >
+          {mode === "analyze" ? "Salva e analizza" : analyze ? "Salva e aggiorna l'analisi" : "Salva"}
         </Button>
         {mode === "analyze" && (
           <Button variant="ghost" onClick={skipTags} loading={skip.isPending} disabled={save.isPending}>

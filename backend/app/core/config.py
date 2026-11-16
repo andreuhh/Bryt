@@ -33,6 +33,9 @@ class Settings(BaseSettings):
     # Weekly refinement scheduler (Sunday evening, athlete's local time)
     scheduler_enabled: bool = True
     scheduler_interval_s: int = 1800
+    # Paid agent analyses per activity requested by the athlete: the first one + re-analyses
+    # after editing the tags (raise when users ask for it)
+    max_analyses_per_activity: int = 2
     # Coach chat: messages per athlete per local day (cost guardrail, checked before the LLM)
     chat_daily_limit: int = 15
 

@@ -564,6 +564,40 @@ async def test_context_tags_analyze_only_on_request(
     assert len(launched) == 2
 
 
+async def test_one_reanalysis_per_activity(
+    api: tuple[httpx.AsyncClient, FakeLLM, list[tuple[uuid.UUID, uuid.UUID]]], athlete: User
+) -> None:
+    """Cost cap: the first analysis + one after editing the tags, then 429 (tags still saved
+    without analysis)."""
+    client, llm, _ = api
+    files = {"file": ("run.fit", build_fit(synthetic_run(30)), "application/octet-stream")}
+    activity_id = (
+        await client.post("/activities/upload-fit", headers=_h(athlete), files=files)
+    ).json()["activity"]["id"]
+    report = (await client.get(f"/activities/{activity_id}/report", headers=_h(athlete))).json()
+    assert report["analyses_left"] == 2
+
+    for left in (1, 0):
+        llm.queue(MechanicalLoadOutput, no_adjustment_mechanical())
+        llm.queue(NutritionRecoveryOutput, nutrition_output())
+        report = (
+            await client.post(f"/activities/{activity_id}/analyze", headers=_h(athlete))
+        ).json()
+        assert report["analyses_left"] == left
+
+    calls = len(llm.calls)
+    over = await client.post(f"/activities/{activity_id}/analyze", headers=_h(athlete))
+    assert over.status_code == 429
+    tags = {"context_tags": {"rpe": 6}}
+    refused = await client.patch(
+        f"/activities/{activity_id}/context?analyze=true", headers=_h(athlete), json=tags
+    )
+    assert refused.status_code == 429
+    saved = await client.patch(f"/activities/{activity_id}/context", headers=_h(athlete), json=tags)
+    assert saved.status_code == 200 and saved.json()["context_tags"]["rpe"] == 6
+    assert len(llm.calls) == calls  # nothing spent past the cap
+
+
 async def test_other_users_cannot_read_activity(
     api: tuple[httpx.AsyncClient, FakeLLM, list[tuple[uuid.UUID, uuid.UUID]]], athlete: User
 ) -> None:

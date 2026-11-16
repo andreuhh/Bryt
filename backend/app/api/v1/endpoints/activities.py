@@ -19,7 +19,12 @@ from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.agents.llm import LLMClient, get_llm
-from app.agents.pipeline import PipelineLauncher, get_pipeline_launcher, run_post_activity_pipeline
+from app.agents.pipeline import (
+    PipelineLauncher,
+    analyses_left,
+    get_pipeline_launcher,
+    run_post_activity_pipeline,
+)
 from app.api.deps import CurrentUser, SessionDep
 from app.core.config import get_settings
 from app.models import Activity, ActivityStream, AgentExecutionLog, User
@@ -154,6 +159,8 @@ async def update_context(
     pipeline (first analysis after an upload); editing tags later never re-spends on its own:
     the athlete asks for a new analysis explicitly (POST /analyze)."""
     activity = await _owned(session, user, activity_id)
+    if analyze:
+        await _ensure_analysis_allowed(session, user, activity_id)
     if body.surface is not None:
         activity.surface = body.surface
         activity.surface_source = SurfaceSource.USER
@@ -180,12 +187,20 @@ async def analyze_now(
     """Runs the agent pipeline. `background=true`: 202 now, poll GET /report (UI);
     otherwise waits for the whole pipeline (debug)."""
     activity = await _owned(session, user, activity_id)
+    await _ensure_analysis_allowed(session, user, activity_id)
     if run_in_background:
         background.add_task(launch_pipeline, user.id, activity.id)
         response.status_code = status.HTTP_202_ACCEPTED
     else:
         await run_post_activity_pipeline(session, llm, user, activity)
     return await read_report(activity_id, user, session)
+
+
+async def _ensure_analysis_allowed(session: SessionDep, user: User, activity_id: uuid.UUID) -> None:
+    if await analyses_left(session, user.id, activity_id) == 0:
+        raise HTTPException(
+            status.HTTP_429_TOO_MANY_REQUESTS, "Analysis limit reached for this activity"
+        )
 
 
 @router.get("/{activity_id}/report", response_model=ActivityReport)
@@ -207,14 +222,16 @@ async def read_report(
             )
         ).all()
     )
+    left = await analyses_left(session, user.id, activity_id)
     if not logs:
-        return ActivityReport(activity_id=activity_id, pipeline_run_id=None)
+        return ActivityReport(activity_id=activity_id, pipeline_run_id=None, analyses_left=left)
     run_id = logs[0].pipeline_run_id
     latest = {log.agent_name: log for log in reversed(logs) if log.pipeline_run_id == run_id}
 
     return ActivityReport(
         activity_id=activity_id,
         pipeline_run_id=run_id,
+        analyses_left=left,
         mechanical_load=_typed_run(latest.get(AgentName.MECHANICAL_LOAD), MechanicalLoadRun),
         plan_adjustment=_typed_run(latest.get(AgentName.TRAINING_PERIODIZATION), PlanAdjustmentRun),
         nutrition_recovery=_typed_run(

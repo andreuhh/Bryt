@@ -33,7 +33,6 @@ export function ActivityView() {
   const report = useActivityReport(id, watching);
   const analyze = useAnalyzeInBackground();
   const [editing, setEditing] = useState<Activity | null>(null);
-  const [tagsChanged, setTagsChanged] = useState(false);
 
   const rows = useMemo(() => (streams.data ? buildSeries(streams.data) : []), [streams.data]);
   const divergence = activity.data?.computed_metrics.cadence_hr_divergence;
@@ -45,13 +44,7 @@ export function ActivityView() {
   const a = activity.data;
   const data = report.data;
   const running = watching && !reportComplete(data);
-  const startAnalysis = () =>
-    analyze.mutate(id, {
-      onSuccess: () => {
-        setWatching(true);
-        setTagsChanged(false);
-      },
-    });
+  const startAnalysis = () => analyze.mutate(id, { onSuccess: () => setWatching(true) });
 
   return (
     <div className="flex flex-col gap-6">
@@ -75,7 +68,7 @@ export function ActivityView() {
               </Badge>
             )}
             <Badge tone="outline">{a.source === "INTERVALS" ? "Intervals.icu" : "Caricata a mano"}</Badge>
-            <Button variant="secondary" size="sm" onClick={() => setEditing(a)}>
+            <Button variant="secondary" size="sm" disabled={running} onClick={() => setEditing(a)}>
               Modifica tag
             </Button>
           </div>
@@ -121,16 +114,7 @@ export function ActivityView() {
 
       <section className="flex flex-col gap-4">
         <h2 className="text-xl font-semibold">Analisi degli agent</h2>
-        {tagsChanged && !running && (
-          <Card variant="card" className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm text-fg-muted">
-              Hai aggiornato i tag: l&apos;analisi qui sotto non ne tiene ancora conto.
-            </p>
-            <Button size="sm" loading={analyze.isPending} onClick={startAnalysis}>
-              Aggiorna l&apos;analisi
-            </Button>
-          </Card>
-        )}
+
         {report.isPending ? (
           <Skeleton className="h-48" />
         ) : running ? (
@@ -170,7 +154,8 @@ export function ActivityView() {
         title="Modifica il contesto"
         activity={editing}
         onClose={() => setEditing(null)}
-        onDone={() => setTagsChanged(true)}
+        analysesLeft={data?.analyses_left ?? 0}
+        onDone={(_, analyzing) => analyzing && setWatching(true)}
       />
     </div>
   );

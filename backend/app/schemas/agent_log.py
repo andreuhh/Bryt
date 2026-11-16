@@ -63,6 +63,7 @@ class ActivityReport(StrictModel):
 
     activity_id: uuid.UUID
     pipeline_run_id: uuid.UUID | None
+    analyses_left: int = Field(description="Analyses the athlete can still request (cost cap)")
     mechanical_load: MechanicalLoadRun | None = None
     plan_adjustment: PlanAdjustmentRun | None = None
     nutrition_recovery: NutritionRecoveryRun | None = None

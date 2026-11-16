@@ -2123,6 +2123,11 @@
       ],
       "title": "Pipeline Run Id"
      },
+     "analyses_left": {
+      "type": "integer",
+      "title": "Analyses Left",
+      "description": "Analyses the athlete can still request (cost cap)"
+     },
      "mechanical_load": {
       "anyOf": [
        {
@@ -2158,7 +2163,8 @@
     "type": "object",
     "required": [
      "activity_id",
-     "pipeline_run_id"
+     "pipeline_run_id",
+     "analyses_left"
     ],
     "title": "ActivityReport",
     "description": "Latest pipeline run for an activity: the three agent outputs (any may be missing)."
