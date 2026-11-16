@@ -28,7 +28,14 @@ class Settings(BaseSettings):
 
     # Anthropic / agents
     anthropic_api_key: str = ""
-    anthropic_model: str = "claude-opus-5-5"
+    anthropic_model: str = "claude-opus-5-5"  # every agent without an override below
+    # Per-agent model overrides (empty = anthropic_model), chosen on a side-by-side run over
+    # real inputs: Haiku matched Opus on the nutrition numbers, Sonnet was close on chat;
+    # the mechanical analysis and the plan stay on Opus.
+    mechanical_load_model: str = ""
+    training_periodization_model: str = ""
+    nutrition_recovery_model: str = "claude-haiku-5-5"
+    coach_chat_model: str = "claude-sonnet-5-5"
     agents_enabled: bool = True  # run the post-activity pipeline automatically after ingestion
     # Weekly refinement scheduler (Sunday evening, athlete's local time)
     scheduler_enabled: bool = True
@@ -55,6 +62,11 @@ class Settings(BaseSettings):
     @property
     def is_development(self) -> bool:
         return self.environment == "development"
+
+    def model_for(self, agent: str) -> str:
+        """Model of an agent (AgentName value): its override, else anthropic_model."""
+        override: str = getattr(self, f"{agent.lower()}_model")
+        return override or self.anthropic_model
 
 
 @lru_cache

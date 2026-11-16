@@ -14,6 +14,7 @@ from app.agents.llm import AgentUnavailableError, get_llm
 from app.agents.pipeline import get_pipeline_launcher, run_post_activity_pipeline
 from app.agents.scheduler import get_plan_job_launcher
 from app.agents.training_periodization import build_plan, refine_plan, start_plan_generation
+from app.core.config import get_settings
 from app.core.database import get_session
 from app.main import app
 from app.models import Activity, AgentExecutionLog, PersonalBest, TrainingPlan, User, Workout
@@ -419,6 +420,22 @@ async def test_pipeline_full_cascade_with_adjustment(
         AgentName.TRAINING_PERIODIZATION,
         AgentName.NUTRITION_RECOVERY,
     }
+    # Each agent runs (and is logged) on its own model
+    settings = get_settings()
+    assert {log.agent_name: log.model for log in logs} == {
+        AgentName.MECHANICAL_LOAD: settings.anthropic_model,
+        AgentName.TRAINING_PERIODIZATION: settings.anthropic_model,
+        AgentName.NUTRITION_RECOVERY: settings.nutrition_recovery_model,
+    }
+    assert llm.calls_for(NutritionRecoveryOutput)[0].model == settings.nutrition_recovery_model
+
+
+def test_model_for_falls_back_to_default_model() -> None:
+    from app.core.config import Settings
+
+    settings = Settings(anthropic_model="m-default", coach_chat_model="m-chat")
+    assert settings.model_for(AgentName.COACH_CHAT) == "m-chat"
+    assert settings.model_for(AgentName.MECHANICAL_LOAD) == "m-default"
 
 
 async def test_pipeline_without_adjustment_skips_periodization(
@@ -659,8 +676,6 @@ async def test_chat_caches_shared_state_and_enforces_daily_quota(
     athlete: User,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.core.config import get_settings
-
     client, llm, _ = api
     await _active_plan_with_workouts(session, athlete)
     monkeypatch.setattr(get_settings(), "chat_daily_limit", 2)

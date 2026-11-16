@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.agents.llm import AgentOutputError, Effort, LLMClient
+from app.core.config import get_settings
 from app.models import AgentExecutionLog
 from app.models.enums import AgentName, AgentRunStatus, AgentTrigger
 
@@ -55,6 +56,7 @@ async def run_agent(
     plan_id: uuid.UUID | None = None,
 ) -> tuple[T, AgentExecutionLog]:
     """Runs the agent and ALWAYS persists a log row (success or error). Raises AgentError."""
+    model = get_settings().model_for(agent)
     log = AgentExecutionLog(
         user_id=user_id,
         agent_name=agent,
@@ -68,7 +70,7 @@ async def run_agent(
             "stable_context": json.loads(json.dumps(stable_context or {}, default=str)),
             "context": json.loads(json.dumps(context, default=str)),
         },
-        model=llm.model,
+        model=model,
     )
     prefix = render_prefix(stable_context) if stable_context else None
     started = time.monotonic()
@@ -85,6 +87,7 @@ async def run_agent(
                     effort=effort,
                     max_tokens=max_tokens,
                     cached_prefix=prefix,
+                    model=model,
                 )
             except AgentOutputError as exc:
                 if attempt == MAX_ATTEMPTS:

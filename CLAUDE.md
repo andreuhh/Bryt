@@ -137,7 +137,10 @@ npm run build && npm run lint
    loggata né restituita dalle API.
 5. **Async ovunque** nel backend (FastAPI, SQLAlchemy async/asyncpg, httpx.AsyncClient).
 6. **Nessun valore fisiologico hardcoded** (vedi §5).
-7. Modello LLM configurabile via `ANTHROPIC_MODEL` (default `claude-opus-5-5`).
+7. Modello LLM configurabile via `ANTHROPIC_MODEL` (default `claude-opus-5-5`), con override per
+   agent (`<AGENT>_MODEL`, `Settings.model_for`): `NUTRITION_RECOVERY_MODEL=claude-haiku-5-5`,
+   `COACH_CHAT_MODEL=claude-sonnet-5-5`; analisi meccanica e piano restano su Opus (scelta fatta
+   con un confronto affiancato su input reali). Il modello usato è salvato nel log.
 
 ### Modello dati (Shared State)
 
@@ -227,7 +230,7 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
 - `llm.py`: `LLMClient` protocol + `AnthropicLLM` (`client.beta.messages.stream`,
   `output_format=<Pydantic>`, `thinking: adaptive`, `output_config.effort` esplicito,
   `cache_control` automatico, refusal fallback server-side `fallbacks="default"` + beta
-  `server-side-fallback-2026-07-01`). Errori → `AgentUnavailableError` (503),
+  `server-side-fallback-2026-07-01`, non su Haiku). Errori → `AgentUnavailableError` (503),
   `AgentRefusalError` (422), `AgentOutputError`/`AgentError` (502).
 - `runner.py`: unico punto di chiamata. Ogni esecuzione → riga `AgentExecutionLog` (anche in
   errore). Validator deterministici di dominio (giorni disponibili, zone esistenti, finestra
