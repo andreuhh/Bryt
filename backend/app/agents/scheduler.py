@@ -18,7 +18,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.agents.context import local_today
 from app.agents.llm import get_llm
-from app.agents.pipeline import PipelineLauncher, run_pipeline_in_background
+from app.agents.pipeline import PipelineLauncher, get_pipeline_launcher
 from app.agents.training_periodization import build_plan, refine_plan
 from app.core.config import get_settings
 from app.core.database import SessionFactory
@@ -131,12 +131,13 @@ async def claim_intervals_poll(
 
 async def run_intervals_poll(
     now: datetime | None = None,
-    launch: PipelineLauncher = run_pipeline_in_background,
+    launch: PipelineLauncher | None = None,
     session_factory: Callable[[], AsyncSession] = SessionFactory,
 ) -> int:
     """One poll tick: imports new runs of every connected athlete and analyzes them right
     away (post-run nutrition is useful now, not tonight). Returns the runs imported."""
     now = now or datetime.now(UTC)
+    launch = launch or get_pipeline_launcher()  # no-op with AGENTS_ENABLED=false (no cost)
     min_age = timedelta(seconds=get_settings().intervals_poll_interval_s) - timedelta(minutes=1)
     async with session_factory() as session:
         profile_ids = list(

@@ -48,6 +48,26 @@ cd ~/Desktop/Bryt/backend && .venv/bin/uvicorn app.main:app --reload
 With agents on, the Sunday-evening automatic plan refinement also uses credits.
 Check your balance at https://console.anthropic.com
 
+### Runs from the watch (Intervals.icu)
+
+Watch → Suunto app → Intervals.icu → BRYT happens on its own **while the backend is running**:
+it checks Intervals.icu every 15 minutes, and again when you open the dashboard. New runs are
+analyzed right away **only with agents on** (command above); with agents off they are imported
+without analysis ("Analizza ora" on the dashboard later). Backend off = nothing happens; on the
+next start it catches up on the last 2 days.
+
+Do the **morning check-in** on the dashboard (hours slept + how you feel): the run analysis
+uses it, so there is no need to add tags afterwards.
+
+### After updating the code
+
+If the database schema changed (new files in `backend/migrations/versions/`), apply it once
+before starting the backend:
+
+```
+cd ~/Desktop/Bryt/backend && .venv/bin/alembic upgrade head
+```
+
 ---
 
 ## First-time setup (once)

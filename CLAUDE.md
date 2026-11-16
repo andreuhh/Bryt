@@ -302,8 +302,9 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
      hanno file via API (ToS Strava) → `NO_FILE`.
    - **Sync automatica**: con le API key personali niente webhook → `agents/scheduler.py`
      `intervals_poll_loop` ogni `INTERVALS_POLL_INTERVAL_S` (900 s; `INTERVALS_POLL_ENABLED`),
-     finestra ultimi 2 giorni, claim atomico su `intervals_synced_at`, analisi subito (il
-     protocollo post-corsa serve ora; con la doppia soglia l'analisi AM arriva prima della PM).
+     finestra ultimi 2 giorni, claim atomico su `intervals_synced_at`, analisi subito se
+     `AGENTS_ENABLED`, altrimenti solo import (il protocollo post-corsa serve ora; con la
+     doppia soglia l'analisi AM arriva prima della PM).
      Più sync all'apertura della dashboard e pulsante manuale (`services/intervals_sync.sync_user`).
    - **Webhook**: configurabili solo per un'app Intervals.icu registrata (OAuth). Payload
      `{secret, events:[{athlete_id, type, activity}]}`; eventi `ACTIVITY_UPLOADED`/
