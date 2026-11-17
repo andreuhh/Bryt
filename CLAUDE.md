@@ -196,6 +196,14 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
     settimane di carico/scarico.
 - **MechanicalLoadAgent**: post-parsing. Confronta eseguito vs pianificato, stress meccanico
   relativo al background, *Cadence vs HR Divergence*, fattori contestuali. Output JSON con flag.
+  - **Analysis triage** (`services/triage.py`, deterministic, `TriageThresholds`): `FULL` on the
+    agent's model, or `LIGHT` (`MECHANICAL_LOAD_LIGHT_MODEL`, Haiku, effort `low`, short output,
+    never `plan_adjustment_needed`) for an easy run without red flags. FULL when: planned
+    quality/key session or easy run off the planned volume (±25%); > 15% of moving time above Z2
+    (HR, pace without HR); speed CV > 0.15; distance > 1.5× the usual run; descent above the
+    usual; breakdown, decoupling > 10%, RPE > 6, unwell, check-in feeling ≤ 2; no zones or
+    < 4 runs in 28 days (when in doubt, FULL); athlete re-analysis. Outcome in the agent
+    context (`triage`) and in the report (`mechanical_load.depth`, UI badge "Analisi rapida").
 - **Coach chat** (`AgentName.COACH_CHAT`): risponde sullo shared state; può solo *proporre*
   una modifica (`proposed_adjustment`), applicata solo dopo conferma via `POST /plans/adjust`.
 - **NutritionRecoveryAgent**: unico agent con output **bipartito**:
@@ -251,7 +259,7 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
   background (`get_pipeline_launcher`, disattivabile con `AGENTS_ENABLED=false`) dopo upload,
   sync Intervals, webhook e aggiornamento dei tag.
 - Effort: scheletro e refinement `high`; blocchi, analisi, adattamento, nutrizione `medium`;
-  chat `low`.
+  chat and LIGHT analysis `low`.
 - Regole calendario (validator): giorni disponibili per le corse (la forza `STRENGTH` è
   esente e non conta come corsa); max 1 corsa al giorno, 2 (AM/PM) solo con
   `double_sessions_ok`; **max 2 sessioni chiave a settimana** (solo lunghi, passo gara,

@@ -461,6 +461,81 @@ def test_model_for_falls_back_to_default_model() -> None:
     assert settings.model_for(AgentName.MECHANICAL_LOAD) == "m-default"
 
 
+async def test_easy_run_gets_light_analysis_and_full_on_reanalysis(
+    session: AsyncSession, athlete: User, storage: LocalFitStorage
+) -> None:
+    from app.api.v1.endpoints.activities import read_report
+
+    await _active_plan_with_workouts(session, athlete)  # today: planned EASY
+    start = datetime.combine(local_today(athlete), time(6, 0), tzinfo=UTC)
+    session.add_all(  # enough history to judge what a usual run is
+        Activity(
+            user_id=athlete.id,
+            source=ActivitySource.MANUAL_UPLOAD,
+            start_time=start - timedelta(days=2 + 3 * i),
+            duration_s=4200,
+            distance_m=14_000,
+        )
+        for i in range(5)
+    )
+    await session.commit()
+    activity = await _ingest_today(session, athlete, storage)  # HR below the top of Z2
+
+    def run_llm() -> FakeLLM:
+        return (
+            FakeLLM()
+            .queue(MechanicalLoadOutput, no_adjustment_mechanical())
+            .queue(NutritionRecoveryOutput, nutrition_output())
+        )
+
+    settings = get_settings()
+    light = run_llm()
+    result = await run_post_activity_pipeline(session, light, athlete, activity)  # type: ignore[arg-type]
+    assert result.errors == []
+    call = light.calls_for(MechanicalLoadOutput)[0]
+    assert call.context["triage"]["depth"] == "LIGHT"
+    assert (call.model, call.effort) == (settings.mechanical_load_light_model, "low")
+    assert "easy run with no red flags" in call.prompt
+    report = await read_report(activity.id, athlete, session)
+    assert report.mechanical_load and report.mechanical_load.depth == "LIGHT"
+    assert report.mechanical_load.model == settings.mechanical_load_light_model
+
+    # The athlete asks again: full analysis on the agent's own model
+    full = run_llm()
+    await run_post_activity_pipeline(session, full, athlete, activity)  # type: ignore[arg-type]
+    call = full.calls_for(MechanicalLoadOutput)[0]
+    assert call.context["triage"]["reasons"] == ["re-analysis requested by the athlete"]
+    assert (call.model, call.effort) == (settings.anthropic_model, "medium")
+
+
+async def test_light_analysis_cannot_adjust_the_plan(
+    session: AsyncSession, athlete: User, storage: LocalFitStorage
+) -> None:
+    start = datetime.combine(local_today(athlete), time(6, 0), tzinfo=UTC)
+    session.add_all(
+        Activity(
+            user_id=athlete.id,
+            source=ActivitySource.MANUAL_UPLOAD,
+            start_time=start - timedelta(days=2 + 3 * i),
+            duration_s=4200,
+            distance_m=14_000,
+        )
+        for i in range(5)
+    )
+    await session.commit()
+    activity = await _ingest_today(session, athlete, storage)
+    no_breakdown = mechanical_output(alerts=[])  # asks for an adjustment
+    llm = (
+        FakeLLM()
+        .queue(MechanicalLoadOutput, no_breakdown, no_adjustment_mechanical())
+        .queue(NutritionRecoveryOutput, nutrition_output())
+    )
+    result = await run_post_activity_pipeline(session, llm, athlete, activity)  # type: ignore[arg-type]
+    assert result.errors == [] and result.adjustment is None
+    assert "plan_adjustment_needed must be false" in llm.calls_for(MechanicalLoadOutput)[1].prompt
+    assert not llm.calls_for(PlanAdjustmentOutput)
+
+
 async def test_pipeline_without_adjustment_skips_periodization(
     session: AsyncSession, athlete: User, storage: LocalFitStorage
 ) -> None:

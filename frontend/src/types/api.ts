@@ -753,6 +753,11 @@ export interface components {
          */
         AlertCode: "MECHANICAL_BREAKDOWN" | "CARDIAC_DRIFT" | "EXCESSIVE_MECHANICAL_LOAD" | "PACE_SPIKE" | "SURFACE_TRANSITION" | "PLAN_DEVIATION" | "CONTEXTUAL_HR_ANOMALY" | "UNDER_RECOVERY";
         /**
+         * AnalysisDepth
+         * @enum {string}
+         */
+        AnalysisDepth: "FULL" | "LIGHT";
+        /**
          * AthleteBackground
          * @enum {string}
          */
@@ -1185,6 +1190,8 @@ export interface components {
             /** Created At */
             created_at: string | null;
             output: components["schemas"]["MechanicalLoadOutput"] | null;
+            /** @description Triage outcome: LIGHT = short note for an easy run */
+            depth?: components["schemas"]["AnalysisDepth"] | null;
         };
         /**
          * Methodology

@@ -56,12 +56,14 @@ async def run_agent(
     validate: Validator[T] | None = None,
     activity_id: uuid.UUID | None = None,
     plan_id: uuid.UUID | None = None,
+    model: str | None = None,
 ) -> tuple[T, AgentExecutionLog]:
     """Runs the agent and ALWAYS persists a log row (success or error). Raises AgentError.
 
     `cache_prefix=False` for one-shot calls whose prefix no other call re-reads within the
-    cache lifetime (different system prompt or model): the cache write would be pure cost."""
-    model = get_settings().model_for(agent)
+    cache lifetime (different system prompt or model): the cache write would be pure cost.
+    `model` overrides the agent's configured model (light analysis of easy runs)."""
+    model = model or get_settings().model_for(agent)
     log = AgentExecutionLog(
         user_id=user_id,
         agent_name=agent,

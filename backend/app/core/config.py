@@ -36,6 +36,8 @@ class Settings(BaseSettings):
     training_periodization_model: str = ""
     nutrition_recovery_model: str = "claude-haiku-5-5"
     coach_chat_model: str = "claude-sonnet-5-5"
+    # Easy runs without red flags (services/triage.py): short note instead of the full analysis
+    mechanical_load_light_model: str = "claude-haiku-5-5"
     agents_enabled: bool = True  # run the post-activity pipeline automatically after ingestion
     # Weekly refinement scheduler (Sunday evening, athlete's local time)
     scheduler_enabled: bool = True

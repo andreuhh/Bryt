@@ -6,7 +6,7 @@ from typing import Any
 
 from pydantic import Field
 
-from app.models.enums import AgentName, AgentRunStatus, AgentTrigger, Feedback
+from app.models.enums import AgentName, AgentRunStatus, AgentTrigger, AnalysisDepth, Feedback
 from app.schemas.agents import MechanicalLoadOutput, NutritionRecoveryOutput, PlanAdjustmentOutput
 from app.schemas.common import ORMModel, StrictModel
 
@@ -48,6 +48,9 @@ class _TypedRun(StrictModel):
 
 class MechanicalLoadRun(_TypedRun):
     output: MechanicalLoadOutput | None
+    depth: AnalysisDepth | None = Field(
+        default=None, description="Triage outcome: LIGHT = short note for an easy run"
+    )
 
 
 class PlanAdjustmentRun(_TypedRun):

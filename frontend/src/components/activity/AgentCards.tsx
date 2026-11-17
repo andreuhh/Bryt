@@ -46,6 +46,11 @@ export function MechanicalCard({ activityId, run, adjustment }: { activityId: st
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
+          {run.depth === "LIGHT" && (
+            <Badge tone="outline" title="Corsa facile senza segnali d'allarme: analisi sintetica">
+              Analisi rapida
+            </Badge>
+          )}
           <Badge tone={load.load_level === "HIGH" || load.load_level === "VERY_HIGH" ? "load" : "neutral"}>
             Carico {LOAD_LEVEL[load.load_level].toLowerCase()}
           </Badge>
@@ -56,6 +61,11 @@ export function MechanicalCard({ activityId, run, adjustment }: { activityId: st
       </div>
 
       <p className="text-sm leading-relaxed">{out.summary}</p>
+      {run.depth === "LIGHT" && (
+        <p className="text-xs text-fg-subtle">
+          Corsa facile senza segnali d&apos;allarme: analisi sintetica. Se aggiorni i tag, la nuova analisi è completa.
+        </p>
+      )}
 
       {(out.alerts ?? []).length > 0 && (
         <ul className="flex flex-col gap-2">
