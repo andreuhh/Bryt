@@ -52,6 +52,7 @@ async def recommend(
         task="Produce the nutrition and recovery protocols for the next 24-48 hours.",
         context=variable,
         stable_context=ctx,
+        cache_prefix=False,  # one-shot: no other call re-reads this prefix
         output_model=NutritionRecoveryOutput,
         effort="medium",
         max_tokens=16000,

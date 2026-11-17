@@ -14,6 +14,7 @@ from app.agents.llm import AgentUnavailableError, get_llm
 from app.agents.pipeline import get_pipeline_launcher, run_post_activity_pipeline
 from app.agents.scheduler import get_plan_job_launcher
 from app.agents.training_periodization import build_plan, refine_plan, start_plan_generation
+from app.core.config import get_settings
 from app.core.database import get_session
 from app.main import app
 from app.models import Activity, AgentExecutionLog, PersonalBest, TrainingPlan, User, Workout
@@ -267,6 +268,7 @@ async def test_build_plan_covers_every_day_with_detail_levels(
     block_calls = llm.calls_for(BlockWorkoutsOutput)
     assert block_calls[0].context["previous_block_last_week"] == []
     assert len(block_calls[1].context["previous_block_last_week"]) == 7  # continuity
+    assert all(c.cache_prefix for c in block_calls)  # blocks re-read the cached skeleton
 
 
 async def test_build_plan_repairs_missing_day(session: AsyncSession, athlete: User) -> None:
@@ -419,6 +421,119 @@ async def test_pipeline_full_cascade_with_adjustment(
         AgentName.TRAINING_PERIODIZATION,
         AgentName.NUTRITION_RECOVERY,
     }
+    # Each agent runs (and is logged) on its own model
+    settings = get_settings()
+    assert {log.agent_name: log.model for log in logs} == {
+        AgentName.MECHANICAL_LOAD: settings.anthropic_model,
+        AgentName.TRAINING_PERIODIZATION: settings.anthropic_model,
+        AgentName.NUTRITION_RECOVERY: settings.nutrition_recovery_model,
+    }
+    assert llm.calls_for(NutritionRecoveryOutput)[0].model == settings.nutrition_recovery_model
+    # One-shot calls skip the cache write (nobody re-reads their prefix)
+    for output_model in (MechanicalLoadOutput, PlanAdjustmentOutput, NutritionRecoveryOutput):
+        assert llm.calls_for(output_model)[0].cache_prefix is False
+    # Cost from the logged tokens (FakeLLM: 100 input, 50 output)
+    from app.agents.pricing import PRICES
+
+    haiku = PRICES[settings.nutrition_recovery_model]
+    nutrition_log = next(log for log in logs if log.agent_name == AgentName.NUTRITION_RECOVERY)
+    assert nutrition_log.cost_usd == pytest.approx((100 * haiku.input + 50 * haiku.output) / 1e6)
+
+
+def test_cost_is_unknown_for_unpriced_models() -> None:
+    from app.agents.pricing import cost_usd
+
+    tokens = {
+        "input_tokens": 1_000_000,
+        "output_tokens": None,
+        "cache_creation_input_tokens": None,
+        "cache_read_input_tokens": 1_000_000,
+    }
+    assert cost_usd("claude-opus-5-5", **tokens) == pytest.approx(4.2)
+    assert cost_usd("fake-model", **tokens) is None
+
+
+def test_model_for_falls_back_to_default_model() -> None:
+    from app.core.config import Settings
+
+    settings = Settings(anthropic_model="m-default", coach_chat_model="m-chat")
+    assert settings.model_for(AgentName.COACH_CHAT) == "m-chat"
+    assert settings.model_for(AgentName.MECHANICAL_LOAD) == "m-default"
+
+
+async def test_easy_run_gets_light_analysis_and_full_on_reanalysis(
+    session: AsyncSession, athlete: User, storage: LocalFitStorage
+) -> None:
+    from app.api.v1.endpoints.activities import read_report
+
+    await _active_plan_with_workouts(session, athlete)  # today: planned EASY
+    start = datetime.combine(local_today(athlete), time(6, 0), tzinfo=UTC)
+    session.add_all(  # enough history to judge what a usual run is
+        Activity(
+            user_id=athlete.id,
+            source=ActivitySource.MANUAL_UPLOAD,
+            start_time=start - timedelta(days=2 + 3 * i),
+            duration_s=4200,
+            distance_m=14_000,
+        )
+        for i in range(5)
+    )
+    await session.commit()
+    activity = await _ingest_today(session, athlete, storage)  # HR below the top of Z2
+
+    def run_llm() -> FakeLLM:
+        return (
+            FakeLLM()
+            .queue(MechanicalLoadOutput, no_adjustment_mechanical())
+            .queue(NutritionRecoveryOutput, nutrition_output())
+        )
+
+    settings = get_settings()
+    light = run_llm()
+    result = await run_post_activity_pipeline(session, light, athlete, activity)  # type: ignore[arg-type]
+    assert result.errors == []
+    call = light.calls_for(MechanicalLoadOutput)[0]
+    assert call.context["triage"]["depth"] == "LIGHT"
+    assert (call.model, call.effort) == (settings.mechanical_load_light_model, "low")
+    assert "easy run with no red flags" in call.prompt
+    report = await read_report(activity.id, athlete, session)
+    assert report.mechanical_load and report.mechanical_load.depth == "LIGHT"
+    assert report.mechanical_load.model == settings.mechanical_load_light_model
+
+    # The athlete asks again: full analysis on the agent's own model
+    full = run_llm()
+    await run_post_activity_pipeline(session, full, athlete, activity)  # type: ignore[arg-type]
+    call = full.calls_for(MechanicalLoadOutput)[0]
+    assert call.context["triage"]["reasons"] == ["re-analysis requested by the athlete"]
+    assert (call.model, call.effort) == (settings.anthropic_model, "medium")
+
+
+async def test_light_analysis_cannot_adjust_the_plan(
+    session: AsyncSession, athlete: User, storage: LocalFitStorage
+) -> None:
+    start = datetime.combine(local_today(athlete), time(6, 0), tzinfo=UTC)
+    session.add_all(
+        Activity(
+            user_id=athlete.id,
+            source=ActivitySource.MANUAL_UPLOAD,
+            start_time=start - timedelta(days=2 + 3 * i),
+            duration_s=4200,
+            distance_m=14_000,
+        )
+        for i in range(5)
+    )
+    await session.commit()
+    activity = await _ingest_today(session, athlete, storage)
+    no_breakdown = mechanical_output(alerts=[])  # asks for an adjustment
+    llm = (
+        FakeLLM()
+        .queue(MechanicalLoadOutput, no_breakdown, no_adjustment_mechanical())
+        .queue(NutritionRecoveryOutput, nutrition_output())
+    )
+    result = await run_post_activity_pipeline(session, llm, athlete, activity)  # type: ignore[arg-type]
+    assert result.errors == [] and result.adjustment is None
+    assert "plan_adjustment_needed must be false" in llm.calls_for(MechanicalLoadOutput)[1].prompt
+    assert not llm.calls_for(PlanAdjustmentOutput)
 
 
 async def test_pipeline_without_adjustment_skips_periodization(
@@ -659,8 +774,6 @@ async def test_chat_caches_shared_state_and_enforces_daily_quota(
     athlete: User,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from app.core.config import get_settings
-
     client, llm, _ = api
     await _active_plan_with_workouts(session, athlete)
     monkeypatch.setattr(get_settings(), "chat_daily_limit", 2)

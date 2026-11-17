@@ -60,10 +60,11 @@ Lettura del sonno da Apple Salute / Google Health Connect: richiede un'app nativ
   contenuto) usando il risultato del test finale per ricalibrare le zone. Nello stesso momento
   chiede "Hai trovato una gara?": se sì, genera il piano verso la gara. Obiettivo: il piano non
   finisce mai, così la fine del piano non diventa il momento in cui l'utente abbandona.
-- **Modello più economico per la chat del coach**: oggi tutti gli agent usano `ANTHROPIC_MODEL`
-  (Opus). Per la chat (domande frequenti, effort `low`) valutare un modello più economico (es.
-  Sonnet 5.5) con un setting dedicato per agent (es. `COACH_CHAT_MODEL`), confrontando qualità
-  delle risposte e costo sugli stessi messaggi prima di cambiarlo.
+- **Modello per agent** ✅ (16/11/2026): `<AGENT>_MODEL`; nutrizione su Haiku 5.5, chat su Sonnet 5.5
+  dopo un confronto su input reali. Da provare: Opus effort `low` per l'analisi meccanica.
+- **Analysis triage** ✅ (17/11/2026): easy runs without red flags get a short Haiku analysis
+  (`services/triage.py`). Still to do: HR-at-pace vs the athlete's baseline as a red flag
+  (needs a pace→HR baseline in `history.py`); tune `TriageThresholds` on alpha-tester data.
 - **Servizio email esterno per Supabase Auth** (SMTP personalizzato, es. Resend/Postmark): quello
   incluso ha limiti di invio molto bassi, ok solo per i primi alpha tester. Serve anche per il
   reset della password (oggi assente).

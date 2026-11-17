@@ -3,6 +3,10 @@
     MechanicalLoadAgent ──► plan_adjustment_needed? ──► TrainingPeriodizationAgent (3-4 days)
             └──────────────────────────────────────────► NutritionRecoveryAgent
 
+The deterministic triage (services/triage.py) runs the MechanicalLoadAgent FULL (its model)
+or LIGHT (easy run without red flags: light model, short, never adjusts the plan). A
+re-analysis requested by the athlete is always FULL.
+
 All steps share one pipeline_run_id in AgentExecutionLog.
 """
 
@@ -43,9 +47,10 @@ async def run_post_activity_pipeline(
     session: AsyncSession, llm: LLMClient, user: User, activity: Activity
 ) -> PipelineResult:
     result = PipelineResult(run_id=uuid.uuid4())
+    reanalysis = await completed_analyses(session, user.id, activity.id) > 0
     try:
         result.mechanical, _ = await analyze_activity(
-            session, llm, user, activity, run_id=result.run_id
+            session, llm, user, activity, run_id=result.run_id, reanalysis=reanalysis
         )
     except (AgentError, MissingProfileError) as exc:
         result.errors.append(f"mechanical_load: {exc}")
@@ -93,10 +98,11 @@ async def run_post_activity_pipeline(
 PipelineLauncher = Callable[[uuid.UUID, uuid.UUID], Awaitable[None]]
 
 
-async def analyses_left(session: AsyncSession, user_id: uuid.UUID, activity_id: uuid.UUID) -> int:
-    """Cost cap per activity: completed analyses (a successful load assessment = one run)
-    against MAX_ANALYSES_PER_ACTIVITY. Failed runs don't count."""
-    done = (
+async def completed_analyses(
+    session: AsyncSession, user_id: uuid.UUID, activity_id: uuid.UUID
+) -> int:
+    """Successful load assessments of the activity (one per pipeline run; failures excluded)."""
+    count: int = (
         await session.exec(
             select(func.count(func.distinct(AgentExecutionLog.pipeline_run_id))).where(
                 AgentExecutionLog.user_id == user_id,
@@ -107,6 +113,12 @@ async def analyses_left(session: AsyncSession, user_id: uuid.UUID, activity_id: 
             )
         )
     ).one()
+    return count
+
+
+async def analyses_left(session: AsyncSession, user_id: uuid.UUID, activity_id: uuid.UUID) -> int:
+    """Cost cap per activity: completed analyses against MAX_ANALYSES_PER_ACTIVITY."""
+    done = await completed_analyses(session, user_id, activity_id)
     return max(get_settings().max_analyses_per_activity - done, 0)
 
 

@@ -228,11 +228,16 @@ async def read_report(
     run_id = logs[0].pipeline_run_id
     latest = {log.agent_name: log for log in reversed(logs) if log.pipeline_run_id == run_id}
 
+    mechanical_log = latest.get(AgentName.MECHANICAL_LOAD)
+    mechanical = _typed_run(mechanical_log, MechanicalLoadRun)
+    if mechanical and mechanical_log:  # runs before the triage existed stay None (= full)
+        triage = mechanical_log.input_snapshot.get("context", {}).get("triage") or {}
+        mechanical.depth = triage.get("depth")
     return ActivityReport(
         activity_id=activity_id,
         pipeline_run_id=run_id,
         analyses_left=left,
-        mechanical_load=_typed_run(latest.get(AgentName.MECHANICAL_LOAD), MechanicalLoadRun),
+        mechanical_load=mechanical,
         plan_adjustment=_typed_run(latest.get(AgentName.TRAINING_PERIODIZATION), PlanAdjustmentRun),
         nutrition_recovery=_typed_run(
             latest.get(AgentName.NUTRITION_RECOVERY), NutritionRecoveryRun

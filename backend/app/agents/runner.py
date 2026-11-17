@@ -11,6 +11,8 @@ from pydantic import BaseModel
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.agents.llm import AgentOutputError, Effort, LLMClient
+from app.agents.pricing import cost_usd
+from app.core.config import get_settings
 from app.models import AgentExecutionLog
 from app.models.enums import AgentName, AgentRunStatus, AgentTrigger
 
@@ -48,13 +50,20 @@ async def run_agent(
     context: dict[str, Any],
     output_model: type[T],
     stable_context: dict[str, Any] | None = None,
+    cache_prefix: bool = True,
     effort: Effort,
     max_tokens: int,
     validate: Validator[T] | None = None,
     activity_id: uuid.UUID | None = None,
     plan_id: uuid.UUID | None = None,
+    model: str | None = None,
 ) -> tuple[T, AgentExecutionLog]:
-    """Runs the agent and ALWAYS persists a log row (success or error). Raises AgentError."""
+    """Runs the agent and ALWAYS persists a log row (success or error). Raises AgentError.
+
+    `cache_prefix=False` for one-shot calls whose prefix no other call re-reads within the
+    cache lifetime (different system prompt or model): the cache write would be pure cost.
+    `model` overrides the agent's configured model (light analysis of easy runs)."""
+    model = model or get_settings().model_for(agent)
     log = AgentExecutionLog(
         user_id=user_id,
         agent_name=agent,
@@ -68,7 +77,7 @@ async def run_agent(
             "stable_context": json.loads(json.dumps(stable_context or {}, default=str)),
             "context": json.loads(json.dumps(context, default=str)),
         },
-        model=llm.model,
+        model=model,
     )
     prefix = render_prefix(stable_context) if stable_context else None
     started = time.monotonic()
@@ -85,6 +94,8 @@ async def run_agent(
                     effort=effort,
                     max_tokens=max_tokens,
                     cached_prefix=prefix,
+                    model=model,
+                    cache_prefix=cache_prefix,
                 )
             except AgentOutputError as exc:
                 if attempt == MAX_ATTEMPTS:
@@ -120,6 +131,13 @@ async def run_agent(
         log.output_tokens = usage["output"] or None
         log.cache_creation_input_tokens = usage["cache_creation"] or None
         log.cache_read_input_tokens = usage["cache_read"] or None
+        log.cost_usd = cost_usd(
+            log.model,
+            input_tokens=log.input_tokens,
+            output_tokens=log.output_tokens,
+            cache_creation_input_tokens=log.cache_creation_input_tokens,
+            cache_read_input_tokens=log.cache_read_input_tokens,
+        )
         session.add(log)
         await session.commit()
         await session.refresh(log)

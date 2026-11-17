@@ -186,3 +186,8 @@ class Severity(StrEnum):
     INFO = "INFO"
     WARNING = "WARNING"
     CRITICAL = "CRITICAL"
+
+
+class AnalysisDepth(StrEnum):
+    FULL = "FULL"  # MechanicalLoadAgent on its own model (Opus)
+    LIGHT = "LIGHT"  # easy run without red flags: short note on the light model (Haiku)

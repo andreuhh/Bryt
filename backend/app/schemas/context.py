@@ -4,7 +4,7 @@ import datetime
 
 from pydantic import Field
 
-from app.models.enums import DataCoverage
+from app.models.enums import AnalysisDepth, DataCoverage
 from app.schemas.common import StrictModel
 
 
@@ -66,3 +66,15 @@ class TrainingBaseline(StrictModel):
 class ElevationQuality(StrictModel):
     reliable: bool | None
     reason: str
+
+
+class AnalysisTriage(StrictModel):
+    """Deterministic choice of the post-activity analysis depth (services/triage.py)."""
+
+    depth: AnalysisDepth
+    reasons: list[str] = Field(
+        default_factory=list, description="Why the run needs the full analysis (empty = easy)"
+    )
+    time_above_easy_pct: float | None = Field(
+        default=None, description="Moving time above the athlete's Z2 (HR, or pace without HR)"
+    )

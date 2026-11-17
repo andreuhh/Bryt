@@ -3,11 +3,11 @@
 AnthropicLLM uses the Messages API with structured outputs (`output_format=<Pydantic model>`,
 validated client-side by the SDK), adaptive thinking, explicit effort, streaming (plans can be
 long), an explicit cache breakpoint after the stable prefix and server-side refusal fallbacks
-(`fallbacks="default"`).
+(`fallbacks="default"`, not on Haiku). The model is chosen per agent (`Settings.model_for`).
 """
 
 from dataclasses import dataclass
-from typing import Generic, Literal, Protocol, TypeVar
+from typing import Any, Generic, Literal, Protocol, TypeVar
 
 import anthropic
 from anthropic.types.beta import BetaMessageParam, BetaTextBlockParam
@@ -20,6 +20,11 @@ T = TypeVar("T", bound=BaseModel)
 Effort = Literal["low", "medium", "high", "xhigh", "max"]
 
 FALLBACK_BETA = "server-side-fallback-2026-07-01"
+
+
+def supports_fallback(model: str) -> bool:
+    """Server-side refusal fallbacks are not available on Haiku."""
+    return not model.startswith("claude-haiku")
 
 
 class AgentError(Exception):
@@ -61,6 +66,8 @@ class LLMClient(Protocol):
         effort: Effort,
         max_tokens: int,
         cached_prefix: str | None = None,
+        model: str | None = None,
+        cache_prefix: bool = True,
     ) -> LLMResult[T]: ...
 
 
@@ -86,27 +93,35 @@ class AnthropicLLM:
         effort: Effort,
         max_tokens: int,
         cached_prefix: str | None = None,
+        model: str | None = None,
+        cache_prefix: bool = True,
     ) -> LLMResult[T]:
+        model = model or self._model
         # Cache breakpoint right after the stable prefix (system + athlete context): calls of
-        # the same run (plan blocks, pipeline agents) re-read it instead of re-writing it.
+        # the same run (plan blocks, chat turns) re-read it instead of re-writing it. Without
+        # re-reads a cache write only costs more (1.25x input), hence `cache_prefix=False`.
         content: list[BetaTextBlockParam] = []
-        if cached_prefix:
+        if cached_prefix and cache_prefix:
             content.append(
                 {"type": "text", "text": cached_prefix, "cache_control": {"type": "ephemeral"}}
             )
+        elif cached_prefix:
+            content.append({"type": "text", "text": cached_prefix})
         content.append({"type": "text", "text": prompt})
         message: BetaMessageParam = {"role": "user", "content": content}
+        fallback: dict[str, Any] = (
+            {"betas": [FALLBACK_BETA], "fallbacks": "default"} if supports_fallback(model) else {}
+        )
         try:
             async with self._client.beta.messages.stream(
-                model=self._model,
+                model=model,
                 max_tokens=max_tokens,
                 system=system,
                 messages=[message],
                 thinking={"type": "adaptive"},
                 output_config={"effort": effort},
                 output_format=output_model,
-                betas=[FALLBACK_BETA],
-                fallbacks="default",
+                **fallback,
             ) as stream:
                 final = await stream.get_final_message()
         except (ValidationError, ValueError) as exc:

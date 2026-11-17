@@ -2682,6 +2682,14 @@
     ],
     "title": "AlertCode"
    },
+   "AnalysisDepth": {
+    "type": "string",
+    "enum": [
+     "FULL",
+     "LIGHT"
+    ],
+    "title": "AnalysisDepth"
+   },
    "AthleteBackground": {
     "type": "string",
     "enum": [
@@ -3940,6 +3948,17 @@
         "type": "null"
        }
       ]
+     },
+     "depth": {
+      "anyOf": [
+       {
+        "$ref": "#/components/schemas/AnalysisDepth"
+       },
+       {
+        "type": "null"
+       }
+      ],
+      "description": "Triage outcome: LIGHT = short note for an easy run"
      }
     },
     "additionalProperties": false,

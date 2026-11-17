@@ -20,6 +20,8 @@ docker-compose.yml   PostgreSQL 16 locale (prod: Supabase-compatibile)
 ### Comandi
 `.venv/bin/python -m scripts.recompute_metrics [--user <uuid>]` ricalcola `computed_metrics`
 dai `.fit` salvati dopo una modifica all'analisi deterministica.
+`.venv/bin/python -m scripts.agent_costs [--user <uuid>] [--months 3]` spesa Claude per utente,
+mese e agent (da `agent_execution_logs.cost_usd`).
 
 ```bash
 docker compose up -d db                                   # Postgres locale
@@ -137,7 +139,10 @@ npm run build && npm run lint
    loggata né restituita dalle API.
 5. **Async ovunque** nel backend (FastAPI, SQLAlchemy async/asyncpg, httpx.AsyncClient).
 6. **Nessun valore fisiologico hardcoded** (vedi §5).
-7. Modello LLM configurabile via `ANTHROPIC_MODEL` (default `claude-opus-5-5`).
+7. Modello LLM configurabile via `ANTHROPIC_MODEL` (default `claude-opus-5-5`), con override per
+   agent (`<AGENT>_MODEL`, `Settings.model_for`): `NUTRITION_RECOVERY_MODEL=claude-haiku-5-5`,
+   `COACH_CHAT_MODEL=claude-sonnet-5-5`; analisi meccanica e piano restano su Opus (scelta fatta
+   con un confronto affiancato su input reali). Il modello usato è salvato nel log.
 
 ### Modello dati (Shared State)
 
@@ -152,7 +157,7 @@ npm run build && npm run lint
 | `activities` | dedup `UNIQUE(user_id, source, external_id)` e `UNIQUE(user_id, fit_sha256)`; `context_tags` JSONB = `ContextTags` |
 | `activity_streams` | serie temporali 1:1 con activity, array allineati su `elapsed_s` |
 | `daily_wellness` | check-in mattutino: `UNIQUE(user_id, day)`, `sleep_hours` (fasce: 5 = ≤5, 9 = 9+), `feeling` 1-5; entrambi facoltativi (mancante = sconosciuto) |
-| `agent_execution_logs` | input/output JSON, `pipeline_run_id` per la cascata, feedback 👍/👎 |
+| `agent_execution_logs` | input/output JSON, `pipeline_run_id` per la cascata, token e `cost_usd`, feedback 👍/👎 |
 
 Regole:
 - Tabelle in `app/models/`, mixin in `base.py` (`IdMixin`, `TimestampMixin`, `TenantMixin`).
@@ -191,6 +196,14 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
     settimane di carico/scarico.
 - **MechanicalLoadAgent**: post-parsing. Confronta eseguito vs pianificato, stress meccanico
   relativo al background, *Cadence vs HR Divergence*, fattori contestuali. Output JSON con flag.
+  - **Analysis triage** (`services/triage.py`, deterministic, `TriageThresholds`): `FULL` on the
+    agent's model, or `LIGHT` (`MECHANICAL_LOAD_LIGHT_MODEL`, Haiku, effort `low`, short output,
+    never `plan_adjustment_needed`) for an easy run without red flags. FULL when: planned
+    quality/key session or easy run off the planned volume (±25%); > 15% of moving time above Z2
+    (HR, pace without HR); speed CV > 0.15; distance > 1.5× the usual run; descent above the
+    usual; breakdown, decoupling > 10%, RPE > 6, unwell, check-in feeling ≤ 2; no zones or
+    < 4 runs in 28 days (when in doubt, FULL); athlete re-analysis. Outcome in the agent
+    context (`triage`) and in the report (`mechanical_load.depth`, UI badge "Analisi rapida").
 - **Coach chat** (`AgentName.COACH_CHAT`): risponde sullo shared state; può solo *proporre*
   una modifica (`proposed_adjustment`), applicata solo dopo conferma via `POST /plans/adjust`.
 - **NutritionRecoveryAgent**: unico agent con output **bipartito**:
@@ -227,7 +240,7 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
 - `llm.py`: `LLMClient` protocol + `AnthropicLLM` (`client.beta.messages.stream`,
   `output_format=<Pydantic>`, `thinking: adaptive`, `output_config.effort` esplicito,
   `cache_control` automatico, refusal fallback server-side `fallbacks="default"` + beta
-  `server-side-fallback-2026-07-01`). Errori → `AgentUnavailableError` (503),
+  `server-side-fallback-2026-07-01`, non su Haiku). Errori → `AgentUnavailableError` (503),
   `AgentRefusalError` (422), `AgentOutputError`/`AgentError` (502).
 - `runner.py`: unico punto di chiamata. Ogni esecuzione → riga `AgentExecutionLog` (anche in
   errore). Validator deterministici di dominio (giorni disponibili, zone esistenti, finestra
@@ -237,13 +250,16 @@ Nuova attività (.fit) ─► fit_parser (deterministico) ─► Activity
   per i blocchi del piano anche lo scheletro) con breakpoint `cache_control`, poi task +
   `<context>` variabile. Chiamate della stessa esecuzione rileggono il prefisso. JSON con
   chiavi ordinate (byte-identico). Nel log: `input_tokens`, `cache_creation_input_tokens`,
-  `cache_read_input_tokens`, `output_tokens` (prezzi diversi).
+  `cache_read_input_tokens`, `output_tokens` (prezzi diversi) e `cost_usd` (`agents/pricing.py`,
+  listino per modello: aggiornarlo se cambiano prezzi o modelli). Le chiamate one-shot
+  (analisi meccanica, nutrizione, adattamento del piano) passano `cache_prefix=False`: nessuno
+  rilegge il loro prefisso, la scrittura in cache (1,25× l'input) sarebbe solo un costo.
 - `context.py`: viste read-only dello shared state (mai la API key Intervals).
 - `pipeline.py`: cascata post-attività con `pipeline_run_id` condiviso. Lanciata in
   background (`get_pipeline_launcher`, disattivabile con `AGENTS_ENABLED=false`) dopo upload,
   sync Intervals, webhook e aggiornamento dei tag.
 - Effort: scheletro e refinement `high`; blocchi, analisi, adattamento, nutrizione `medium`;
-  chat `low`.
+  chat and LIGHT analysis `low`.
 - Regole calendario (validator): giorni disponibili per le corse (la forza `STRENGTH` è
   esente e non conta come corsa); max 1 corsa al giorno, 2 (AM/PM) solo con
   `double_sessions_ok`; **max 2 sessioni chiave a settimana** (solo lunghi, passo gara,

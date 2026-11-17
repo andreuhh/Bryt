@@ -34,6 +34,8 @@ class Call:
     prompt: str
     effort: str
     cached_prefix: str | None = None
+    model: str | None = None
+    cache_prefix: bool = True
 
     @property
     def context(self) -> dict[str, Any]:
@@ -65,8 +67,10 @@ class FakeLLM:
         effort: Effort,
         max_tokens: int,
         cached_prefix: str | None = None,
+        model: str | None = None,
+        cache_prefix: bool = True,
     ) -> LLMResult[T]:
-        call = Call(output_model, system, prompt, effort, cached_prefix)
+        call = Call(output_model, system, prompt, effort, cached_prefix, model, cache_prefix)
         self.calls.append(call)
         item = self.responses[output_model].popleft()
         if isinstance(item, Exception):
@@ -74,7 +78,7 @@ class FakeLLM:
         if callable(item) and not isinstance(item, BaseModel):
             item = item(call.context)
         assert isinstance(item, output_model)
-        return LLMResult(parsed=item, model=self.model, input_tokens=100, output_tokens=50)
+        return LLMResult(parsed=item, model=model or self.model, input_tokens=100, output_tokens=50)
 
     def calls_for(self, output_model: type[BaseModel]) -> list[Call]:
         return [c for c in self.calls if c.output_model is output_model]

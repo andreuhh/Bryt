@@ -40,6 +40,8 @@ class AgentExecutionLog(IdMixin, TimestampMixin, TenantMixin, table=True):
     cache_creation_input_tokens: int | None = Field(default=None, ge=0)
     cache_read_input_tokens: int | None = Field(default=None, ge=0)
     output_tokens: int | None = Field(default=None, ge=0)
+    # From the tokens above and app/agents/pricing.py (None for an unpriced model)
+    cost_usd: float | None = Field(default=None, ge=0)
     latency_ms: int | None = Field(default=None, ge=0)
 
     feedback: Feedback | None = Field(default=None, sa_column=enum_column(Feedback, nullable=True))
