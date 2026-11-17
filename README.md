@@ -21,11 +21,16 @@ Every command fits on **one line**: copy it and paste it into a **separate termi
 cd ~/Desktop/Bryt && docker compose up -d db
 ```
 
-**2. Backend** — terminal 1 (agents off: no cost):
+**2. Backend** — terminal 1 (agents on: real analyses with Claude):
 
 ```
-cd ~/Desktop/Bryt/backend && AGENTS_ENABLED=false .venv/bin/uvicorn app.main:app --reload
+cd ~/Desktop/Bryt/backend && .venv/bin/uvicorn app.main:app --reload
 ```
+
+Cost per run analysis: an easy run gets the light analysis on Haiku (≈ $0.003); quality
+sessions, long runs and re-analyses run in full on Opus (≈ $0.10–0.30). The coach chat and the
+Sunday-evening automatic plan refinement also use credits.
+Check your balance at https://console.anthropic.com
 
 **3. Frontend** — terminal 2:
 
@@ -37,24 +42,24 @@ Then open **http://localhost:3000**
 
 To stop the backend or the frontend: `Ctrl+C` in its terminal.
 
-### Agents on (real analyses with Claude, ~$0.30 per run)
+### Agents off (no Claude cost, for working on the UI)
 
 Use this instead of command 2:
 
 ```
-cd ~/Desktop/Bryt/backend && .venv/bin/uvicorn app.main:app --reload
+cd ~/Desktop/Bryt/backend && AGENTS_ENABLED=false .venv/bin/uvicorn app.main:app --reload
 ```
 
-With agents on, the Sunday-evening automatic plan refinement also uses credits.
-Check your balance at https://console.anthropic.com
+Runs are still imported, with charts and metrics, but **never analyzed**: "Analizza ora" answers
+"Analisi non disponibile". Restart with command 2 to analyze them.
 
 ### Runs from the watch (Intervals.icu)
 
 Watch → Suunto app → Intervals.icu → BRYT happens on its own **while the backend is running**:
 it checks Intervals.icu every 15 minutes, and again when you open the dashboard. New runs are
-analyzed right away **only with agents on** (command above); with agents off they are imported
-without analysis ("Analizza ora" on the dashboard later). Backend off = nothing happens; on the
-next start it catches up on the last 2 days.
+analyzed right away **only with agents on** (command 2); with agents off they are imported
+without analysis ("Analizza ora" on the dashboard after restarting with agents on). Backend off =
+nothing happens; on the next start it catches up on the last 2 days.
 
 Do the **morning check-in** on the dashboard (hours slept + how you feel): the run analysis
 uses it, so there is no need to add tags afterwards.

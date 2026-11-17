@@ -140,6 +140,11 @@ async def _noop(user_id: uuid.UUID, activity_id: uuid.UUID) -> None:
     return None
 
 
+def agents_disabled(launch: PipelineLauncher) -> bool:
+    """AGENTS_ENABLED=false: the launcher does nothing, so an analysis would never arrive."""
+    return launch is _noop
+
+
 def get_pipeline_launcher() -> PipelineLauncher:
     """FastAPI dependency: overridden in tests; disabled with AGENTS_ENABLED=false."""
     return run_pipeline_in_background if get_settings().agents_enabled else _noop

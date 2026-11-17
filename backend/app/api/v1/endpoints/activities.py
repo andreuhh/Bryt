@@ -21,6 +21,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from app.agents.llm import LLMClient, get_llm
 from app.agents.pipeline import (
     PipelineLauncher,
+    agents_disabled,
     analyses_left,
     get_pipeline_launcher,
     run_post_activity_pipeline,
@@ -160,7 +161,7 @@ async def update_context(
     the athlete asks for a new analysis explicitly (POST /analyze)."""
     activity = await _owned(session, user, activity_id)
     if analyze:
-        await _ensure_analysis_allowed(session, user, activity_id)
+        await _ensure_analysis_allowed(session, user, activity_id, launch_pipeline)
     if body.surface is not None:
         activity.surface = body.surface
         activity.surface_source = SurfaceSource.USER
@@ -187,7 +188,7 @@ async def analyze_now(
     """Runs the agent pipeline. `background=true`: 202 now, poll GET /report (UI);
     otherwise waits for the whole pipeline (debug)."""
     activity = await _owned(session, user, activity_id)
-    await _ensure_analysis_allowed(session, user, activity_id)
+    await _ensure_analysis_allowed(session, user, activity_id, launch_pipeline)
     if run_in_background:
         background.add_task(launch_pipeline, user.id, activity.id)
         response.status_code = status.HTTP_202_ACCEPTED
@@ -196,7 +197,12 @@ async def analyze_now(
     return await read_report(activity_id, user, session)
 
 
-async def _ensure_analysis_allowed(session: SessionDep, user: User, activity_id: uuid.UUID) -> None:
+async def _ensure_analysis_allowed(
+    session: SessionDep, user: User, activity_id: uuid.UUID, launch: PipelineLauncher
+) -> None:
+    # A 202 with agents off would leave the client polling for a report that never comes
+    if agents_disabled(launch):
+        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Agents are disabled")
     if await analyses_left(session, user.id, activity_id) == 0:
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS, "Analysis limit reached for this activity"

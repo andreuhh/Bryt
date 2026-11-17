@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/States";
-import { activityDay } from "@/lib/dashboard";
+import { activityDay, analysisErrorMessage } from "@/lib/dashboard";
 import { formatDay, km, pace } from "@/lib/format";
 import { reportComplete, useActivityReport, useAnalyzeInBackground } from "@/lib/queries";
 import type { Activity, ActivityReport, AgentAlert } from "@/lib/types";
@@ -73,6 +73,7 @@ export function LatestAnalysis({
           >
             Analizza ora
           </Button>
+          {analyze.isError && <p className="text-sm text-fg-muted">{analysisErrorMessage(analyze.error)}</p>}
         </div>
       ) : data.mechanical_load.status === "ERROR" || !data.mechanical_load.output ? (
         <div className="flex flex-col items-start gap-3 text-sm">
@@ -85,6 +86,7 @@ export function LatestAnalysis({
           >
             Riprova
           </Button>
+          {analyze.isError && <p className="text-fg-muted">{analysisErrorMessage(analyze.error)}</p>}
         </div>
       ) : (
         <AnalysisSummary report={data} />

@@ -1,5 +1,6 @@
 /** Pure helpers for the dashboard (no React). */
 
+import { ApiError } from "@/lib/api";
 import type { Activity, NutritionRecovery, SyncResult, Workout } from "@/lib/types";
 
 const localDay = new Intl.DateTimeFormat("en-CA", { timeZone: "Europe/Rome" });
@@ -38,6 +39,14 @@ export const SURFACE_LABEL = {
   TREADMILL: "Tapis roulant",
   MIXED: "Misto",
 } as const;
+
+/** Why an analysis could not start (POST /analyze, PATCH /context?analyze=true). */
+export function analysisErrorMessage(error: Error): string {
+  if (!(error instanceof ApiError)) return error.message;
+  if (error.status === 503) return "Analisi non disponibile: gli agent sono disattivati su questo server.";
+  if (error.status === 429) return "Hai già usato le analisi disponibili per questa corsa.";
+  return error.message;
+}
 
 export function syncCounts(result: SyncResult) {
   const count = (status: string) => result.items.filter((i) => i.status === status).length;

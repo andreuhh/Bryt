@@ -1279,6 +1279,27 @@ async def test_upload_without_analysis_then_background_analyze(
     assert launched == [(athlete.id, uuid.UUID(activity_id))]
 
 
+async def test_analysis_requests_fail_fast_with_agents_disabled(
+    api: tuple[httpx.AsyncClient, FakeLLM, list[tuple[uuid.UUID, uuid.UUID]]], athlete: User
+) -> None:
+    """AGENTS_ENABLED=false: a 202 would leave the client polling a report that never comes."""
+    client, _, _ = api
+    files = {"file": ("run.fit", build_fit(synthetic_run(30)), "application/octet-stream")}
+    up = await client.post("/activities/upload-fit?analyze=false", headers=_h(athlete), files=files)
+    activity_id = up.json()["activity"]["id"]
+    app.dependency_overrides.pop(get_pipeline_launcher)  # real one: AGENTS_ENABLED=false in tests
+
+    started = await client.post(
+        f"/activities/{activity_id}/analyze?background=true", headers=_h(athlete)
+    )
+    tagged = await client.patch(
+        f"/activities/{activity_id}/context?analyze=true",
+        headers=_h(athlete),
+        json={"context_tags": {}},
+    )
+    assert started.status_code == 503 and tagged.status_code == 503
+
+
 async def test_rerunning_onboarding_keeps_intervals_credentials(
     api: tuple[httpx.AsyncClient, FakeLLM, list[tuple[uuid.UUID, uuid.UUID]]],
     session: AsyncSession,

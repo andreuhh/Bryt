@@ -7,7 +7,7 @@ import { Modal } from "@/components/ui/Modal";
 import { Pill } from "@/components/ui/Pill";
 import { SegmentedControl } from "@/components/ui/SegmentedControl";
 import { useToast } from "@/components/ui/Toast";
-import { activityDay, SURFACE_LABEL } from "@/lib/dashboard";
+import { activityDay, analysisErrorMessage, SURFACE_LABEL } from "@/lib/dashboard";
 import { formatDay, km } from "@/lib/format";
 import { useAnalyzeInBackground, useSaveContext, useWellness } from "@/lib/queries";
 import type { Activity, ContextTags, Surface } from "@/lib/types";
@@ -144,7 +144,7 @@ function TagsForm({
           toast(analyze ? "Contesto salvato: il coach sta analizzando la corsa" : "Tag salvati", "success");
           finish(analyze);
         },
-        onError: (e) => toast(e.message, "error"),
+        onError: (e) => toast(analysisErrorMessage(e), "error"),
       },
     );
   };
@@ -155,7 +155,7 @@ function TagsForm({
         toast("Analisi avviata senza tag", "neutral");
         finish(true);
       },
-      onError: (e) => toast(e.message, "error"),
+      onError: (e) => toast(analysisErrorMessage(e), "error"),
     });
 
   return (

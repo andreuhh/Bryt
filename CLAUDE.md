@@ -105,6 +105,8 @@ npm run build && npm run lint
 - **Tetto analisi per corsa**: `MAX_ANALYSES_PER_ACTIVITY` (default 2 = prima analisi + una
   rianalisi) sulle analisi richieste dall'atleta (`/analyze`, `PATCH /context?analyze=true` → 429
   oltre il tetto); `GET /report` espone `analyses_left`. Le analisi fallite non contano.
+  Con `AGENTS_ENABLED=false` le stesse richieste → 503 (mai un 202 che lascerebbe il client in
+  polling su un report che non arriverà), la UI mostra "Analisi non disponibile".
 - **Check-in mattutino** (`CheckInCard` in cima alla dashboard): ore dormite + come ti senti
   (emoji 1-5), ogni tocco salva, compilato si riduce a una riga. Facoltativo, nessun promemoria.
   Pre-compila il sonno nella modale dei tag. Agli agent arriva `wellness`

@@ -14,7 +14,7 @@ import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { ErrorState, Skeleton } from "@/components/ui/States";
 import { buildSeries, divergenceSegments } from "@/lib/activity";
-import { activityDay, SURFACE_LABEL } from "@/lib/dashboard";
+import { activityDay, analysisErrorMessage, SURFACE_LABEL } from "@/lib/dashboard";
 import { duration, formatLong, km, pace } from "@/lib/format";
 import {
   reportComplete,
@@ -129,6 +129,7 @@ export function ActivityView() {
             <Button size="sm" loading={analyze.isPending} onClick={startAnalysis}>
               Analizza ora
             </Button>
+            {analyze.isError && <p className="text-sm text-fg-muted">{analysisErrorMessage(analyze.error)}</p>}
           </Card>
         ) : (
           <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
