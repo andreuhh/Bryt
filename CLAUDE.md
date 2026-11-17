@@ -89,6 +89,10 @@ npm run build && npm run lint
   degli agent arrivano tipizzati dal report; feedback 👍/👎 (commento facoltativo sul 👎).
 - Componenti custom in `components/ui` (Button, Badge, Card, Pill, Metric, Modal su
   `<dialog>`, SegmentedControl, States) e icone inline in `components/icons.tsx`.
+- **Design system page** `/design-system` (`app/design-system/page.dev.tsx`): development only,
+  `.dev.tsx` pages exist on `next dev` alone (`pageExtensions` by phase in `next.config.ts`), so
+  the route and its code never reach the production build. Tokens are read live from
+  `globals.css`. **Every new component or variant in `components/ui` must be added there.**
 - **Upload dalla dashboard = una sola analisi**: upload con `analyze=false` → modale tag →
   "Salva e analizza" (`PATCH /context`, avvia la pipeline) oppure "Salta" (`analyze?background=true`).
   Chiudere la modale non avvia nulla (la card "Ultima analisi" offre "Analizza ora"). La sync

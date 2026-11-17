@@ -13,7 +13,7 @@ export function WorkoutBadges({ workout, compact = false }: { workout: Workout; 
       )}
       {workout.session_slot !== "SINGLE" && <Badge>{workout.session_slot}</Badge>}
       {workout.status === "MODIFIED" && (
-        <Badge tone="load" title={workout.modification_reason ?? undefined}>
+        <Badge title={workout.modification_reason ?? undefined}>
           Modificata
         </Badge>
       )}

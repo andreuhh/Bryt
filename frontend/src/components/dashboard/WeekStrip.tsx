@@ -62,7 +62,7 @@ export function WeekStrip({
                 {workoutVolume(w) && <span className="metric pl-3 text-[11px] text-fg-subtle">{workoutVolume(w)}</span>}
                 {w.status === "MODIFIED" && (
                   <span className="pl-3">
-                    <Badge tone="load" className="text-[10px]">
+                    <Badge className="text-[10px]">
                       Modificata
                     </Badge>
                   </span>
