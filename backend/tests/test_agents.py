@@ -6,12 +6,17 @@ from datetime import UTC, date, datetime, time, timedelta
 
 import httpx
 import pytest
-from sqlmodel import col, select
+from sqlalchemy import Update
+from sqlmodel import col, select, update
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.agents.context import local_today
 from app.agents.llm import AgentUnavailableError, get_llm
-from app.agents.pipeline import get_pipeline_launcher, run_post_activity_pipeline
+from app.agents.pipeline import (
+    claim_analysis,
+    get_pipeline_launcher,
+    run_post_activity_pipeline,
+)
 from app.agents.scheduler import get_plan_job_launcher
 from app.agents.training_periodization import build_plan, refine_plan, start_plan_generation
 from app.core.config import get_settings
@@ -584,6 +589,36 @@ async def test_pipeline_stops_and_logs_when_llm_unavailable(
     assert log.status == AgentRunStatus.ERROR and "no credentials" in (log.error or "")
 
 
+def _set_started(activity_id: uuid.UUID, at: datetime | None) -> Update:
+    return update(Activity).where(col(Activity.id) == activity_id).values(analysis_started_at=at)
+
+
+async def test_one_pipeline_per_activity_at_a_time(
+    session: AsyncSession, athlete: User, storage: LocalFitStorage
+) -> None:
+    activity = await _ingest_today(session, athlete, storage)
+    assert await claim_analysis(session, activity.id)  # e.g. the backend poll got there first
+    llm = FakeLLM()
+    skipped = await run_post_activity_pipeline(session, llm, athlete, activity)  # type: ignore[arg-type]
+    assert skipped.errors == ["analysis already running"] and not llm.calls
+
+    await session.exec(_set_started(activity.id, None))  # the first run ends
+    llm.queue(MechanicalLoadOutput, no_adjustment_mechanical())
+    llm.queue(NutritionRecoveryOutput, nutrition_output())
+    done = await run_post_activity_pipeline(session, llm, athlete, activity)  # type: ignore[arg-type]
+    assert done.errors == []
+    assert await claim_analysis(session, activity.id)  # released when the run ends
+
+
+async def test_stale_claim_of_a_crashed_run_expires(
+    session: AsyncSession, athlete: User, storage: LocalFitStorage
+) -> None:
+    activity = await _ingest_today(session, athlete, storage)
+    crashed = datetime.now(UTC) - timedelta(hours=1)
+    await session.exec(_set_started(activity.id, crashed))
+    assert await claim_analysis(session, activity.id)
+
+
 # --- HTTP endpoints -----------------------------------------------------------------------
 
 
@@ -599,7 +634,7 @@ async def api(
     async def _session() -> AsyncIterator[AsyncSession]:
         yield session
 
-    async def _launch(user_id: uuid.UUID, activity_id: uuid.UUID) -> None:
+    async def _launch(user_id: uuid.UUID, activity_id: uuid.UUID, *, claimed: bool = False) -> None:
         launched.append((user_id, activity_id))
 
     app.dependency_overrides[get_session] = _session
@@ -1277,6 +1312,12 @@ async def test_upload_without_analysis_then_background_analyze(
     )
     assert started.status_code == 202
     assert launched == [(athlete.id, uuid.UUID(activity_id))]
+    # Claimed before answering: in progress from the first poll, a double click is refused
+    assert started.json()["analysis_running"] is True
+    again = await client.post(
+        f"/activities/{activity_id}/analyze?background=true", headers=_h(athlete)
+    )
+    assert again.status_code == 409 and len(launched) == 1
 
 
 async def test_analysis_requests_fail_fast_with_agents_disabled(
@@ -1298,6 +1339,36 @@ async def test_analysis_requests_fail_fast_with_agents_disabled(
         json={"context_tags": {}},
     )
     assert started.status_code == 503 and tagged.status_code == 503
+
+
+async def test_report_shows_a_run_in_progress_whoever_started_it(
+    api: tuple[httpx.AsyncClient, FakeLLM, list[tuple[uuid.UUID, uuid.UUID]]],
+    session: AsyncSession,
+    athlete: User,
+) -> None:
+    client, llm, launched = api
+    files = {"file": ("run.fit", build_fit(synthetic_run(30)), "application/octet-stream")}
+    up = await client.post("/activities/upload-fit?analyze=false", headers=_h(athlete), files=files)
+    activity_id = up.json()["activity"]["id"]
+    llm.queue(MechanicalLoadOutput, no_adjustment_mechanical())
+    llm.queue(NutritionRecoveryOutput, nutrition_output())
+    await client.post(f"/activities/{activity_id}/analyze", headers=_h(athlete))
+
+    # A re-analysis started elsewhere (backend poll, another tab): explicit timestamp because
+    # now() is frozen inside the test transaction
+    await session.exec(_set_started(uuid.UUID(activity_id), datetime.now(UTC)))
+    report = (await client.get(f"/activities/{activity_id}/report", headers=_h(athlete))).json()
+    assert report["analysis_running"] is True
+    assert report["mechanical_load"] is None  # the previous run is being replaced
+
+    again = await client.post(
+        f"/activities/{activity_id}/analyze?background=true", headers=_h(athlete)
+    )
+    assert again.status_code == 409 and launched == []
+
+    await session.exec(_set_started(uuid.UUID(activity_id), None))
+    report = (await client.get(f"/activities/{activity_id}/report", headers=_h(athlete))).json()
+    assert report["analysis_running"] is False and report["mechanical_load"] is not None
 
 
 async def test_rerunning_onboarding_keeps_intervals_credentials(

@@ -145,7 +145,9 @@ async def test_sync_backfill_skips_the_agents(
 
     launched: list[uuid.UUID] = []
 
-    async def _launch(_user_id: uuid.UUID, activity_id: uuid.UUID) -> None:
+    async def _launch(
+        _user_id: uuid.UUID, activity_id: uuid.UUID, *, claimed: bool = False
+    ) -> None:
         launched.append(activity_id)
 
     monkeypatch.setattr(intervals_sync.IntervalsClient, "get_athlete", _ok)

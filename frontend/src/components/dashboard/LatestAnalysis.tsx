@@ -9,7 +9,7 @@ import { Card } from "@/components/ui/Card";
 import { Skeleton } from "@/components/ui/States";
 import { activityDay, analysisErrorMessage } from "@/lib/dashboard";
 import { formatDay, km, pace } from "@/lib/format";
-import { reportComplete, useActivityReport, useAnalyzeInBackground } from "@/lib/queries";
+import { useActivityReport, useAnalyzeInBackground } from "@/lib/queries";
 import type { Activity, ActivityReport, AgentAlert } from "@/lib/types";
 
 const SEVERITY: Record<AgentAlert["severity"], { label: string; tone: "load" | "neutral" }> = {
@@ -39,7 +39,7 @@ export function LatestAnalysis({
     );
 
   const data = report.data;
-  const running = watching && !reportComplete(data);
+  const running = report.inProgress;
 
   return (
     <Card className="flex flex-col gap-5">

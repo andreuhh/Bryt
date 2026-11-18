@@ -44,6 +44,7 @@ export const SURFACE_LABEL = {
 export function analysisErrorMessage(error: Error): string {
   if (!(error instanceof ApiError)) return error.message;
   if (error.status === 503) return "Analisi non disponibile: gli agent sono disattivati su questo server.";
+  if (error.status === 409) return "Analisi già in corso: il risultato arriva tra poco.";
   if (error.status === 429) return "Hai già usato le analisi disponibili per questa corsa.";
   return error.message;
 }

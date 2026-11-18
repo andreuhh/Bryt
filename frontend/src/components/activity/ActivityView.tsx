@@ -17,7 +17,6 @@ import { buildSeries, divergenceSegments } from "@/lib/activity";
 import { activityDay, analysisErrorMessage, SURFACE_LABEL } from "@/lib/dashboard";
 import { duration, formatLong, km, pace } from "@/lib/format";
 import {
-  reportComplete,
   useActivity,
   useActivityReport,
   useActivityStreams,
@@ -43,7 +42,7 @@ export function ActivityView() {
 
   const a = activity.data;
   const data = report.data;
-  const running = watching && !reportComplete(data);
+  const running = report.inProgress;
   const startAnalysis = () => analyze.mutate(id, { onSuccess: () => setWatching(true) });
 
   return (

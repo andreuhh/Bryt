@@ -1,10 +1,12 @@
 "use client";
 
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect, useRef, useState } from "react";
 
 import { api, unwrap } from "@/lib/api";
 import { addDays, today } from "@/lib/format";
 import type {
+  ActivityReport,
   ChatMessage,
   ContextTags,
   Feedback,
@@ -137,18 +139,44 @@ export function reportComplete(report: { mechanical_load?: { status: string } | 
 }
 
 const POLL_MS = 4000;
-const POLL_MAX = 75; // ~5 minutes
+// A run this client started but never sees (crash before any log): stop following it.
+// `analysis_running` needs no bound: the backend claim expires on its own.
+const FOLLOW_MS = 5 * 60 * 1000;
 
-/** `watch`: the pipeline was just started by this client → poll until the report completes. */
+/**
+ * Report plus `inProgress`: an analysis is running whoever started it (backend poll, webhook,
+ * another tab: `analysis_running`), or this client just started it (`watch`) and the report is not
+ * complete yet. Polls while in progress; at the end the plan may have been adapted.
+ */
 export function useActivityReport(activityId: string | null, watch = false) {
-  return useQuery({
+  const client = useQueryClient();
+  const [watchSince, setWatchSince] = useState<number | null>(null);
+  const inProgress = (report: ActivityReport | undefined, updatedAt: number) =>
+    Boolean(report?.analysis_running) ||
+    (watch && !reportComplete(report) && (!watchSince || updatedAt - watchSince < FOLLOW_MS));
+  const query = useQuery({
     queryKey: keys.report(activityId ?? ""),
     queryFn: () =>
       unwrap(api.GET("/api/v1/activities/{activity_id}/report", { params: { path: { activity_id: activityId! } } })),
     enabled: Boolean(activityId),
-    refetchInterval: (query) =>
-      watch && !reportComplete(query.state.data) && query.state.dataUpdateCount < POLL_MAX ? POLL_MS : false,
+    refetchInterval: (q) => (inProgress(q.state.data, q.state.dataUpdatedAt) ? POLL_MS : false),
   });
+
+  // First report seen while watching: the reference for FOLLOW_MS (no clock read during render)
+  if (!watch && watchSince !== null) setWatchSince(null);
+  else if (watch && watchSince === null && query.dataUpdatedAt) setWatchSince(query.dataUpdatedAt);
+
+  const running = inProgress(query.data, query.dataUpdatedAt);
+  const wasRunning = useRef(running);
+  useEffect(() => {
+    if (wasRunning.current && !running) {
+      void client.invalidateQueries({ queryKey: ["workouts"] });
+      void client.invalidateQueries({ queryKey: keys.activePlan });
+    }
+    wasRunning.current = running;
+  }, [running, client]);
+
+  return { ...query, inProgress: running };
 }
 
 function useInvalidateActivities() {
@@ -203,6 +231,7 @@ export function useSaveContext() {
 }
 
 export function useAnalyzeInBackground() {
+  const client = useQueryClient();
   return useMutation({
     mutationFn: (id: string) =>
       unwrap(
@@ -210,6 +239,10 @@ export function useAnalyzeInBackground() {
           params: { path: { activity_id: id }, query: { background: true } },
         }),
       ),
+    // The 202 report is already claimed (`analysis_running`): progress shows without waiting a poll
+    onSuccess: (report, id) => client.setQueryData(keys.report(id), report),
+    // e.g. 409, started elsewhere meanwhile: the fresh report shows that run in progress
+    onError: (_, id) => void client.invalidateQueries({ queryKey: keys.report(id) }),
   });
 }
 

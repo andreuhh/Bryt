@@ -283,6 +283,7 @@ export interface paths {
         /**
          * Read Report
          * @description Latest pipeline run for the activity (one entry per agent; missing = not run/failed).
+         *     While a run is in progress, `analysis_running` and only that run's finished agents.
          */
         get: operations["read_report_api_v1_activities__activity_id__report_get"];
         put?: never;
@@ -648,6 +649,12 @@ export interface components {
              * @description Analyses the athlete can still request (cost cap)
              */
             analyses_left: number;
+            /**
+             * Analysis Running
+             * @description A pipeline run is in progress (whoever started it)
+             * @default false
+             */
+            analysis_running: boolean;
             mechanical_load?: components["schemas"]["MechanicalLoadRun"] | null;
             plan_adjustment?: components["schemas"]["PlanAdjustmentRun"] | null;
             nutrition_recovery?: components["schemas"]["NutritionRecoveryRun"] | null;

@@ -51,6 +51,9 @@ class Activity(IdMixin, TimestampMixin, TenantMixin, table=True):
     )
     context_tags: dict[str, Any] = Field(default_factory=dict, sa_column=jsonb_column())
 
+    # Set while the agent pipeline runs (claimed atomically, see agents/pipeline.py)
+    analysis_started_at: datetime | None = Field(default=None, sa_type=DateTime(timezone=True))
+
 
 class ActivityStream(IdMixin, TimestampMixin, TenantMixin, table=True):
     """Time series kept apart from Activity so calendar/list queries stay light.

@@ -967,7 +967,7 @@
      "activities"
     ],
     "summary": "Read Report",
-    "description": "Latest pipeline run for the activity (one entry per agent; missing = not run/failed).",
+    "description": "Latest pipeline run for the activity (one entry per agent; missing = not run/failed).\nWhile a run is in progress, `analysis_running` and only that run's finished agents.",
     "operationId": "read_report_api_v1_activities__activity_id__report_get",
     "security": [
      {
@@ -2294,6 +2294,12 @@
       "type": "integer",
       "title": "Analyses Left",
       "description": "Analyses the athlete can still request (cost cap)"
+     },
+     "analysis_running": {
+      "type": "boolean",
+      "title": "Analysis Running",
+      "description": "A pipeline run is in progress (whoever started it)",
+      "default": false
      },
      "mechanical_load": {
       "anyOf": [

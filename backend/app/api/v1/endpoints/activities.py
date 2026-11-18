@@ -23,6 +23,8 @@ from app.agents.pipeline import (
     PipelineLauncher,
     agents_disabled,
     analyses_left,
+    analysis_running,
+    claim_analysis,
     get_pipeline_launcher,
     run_post_activity_pipeline,
 )
@@ -161,7 +163,7 @@ async def update_context(
     the athlete asks for a new analysis explicitly (POST /analyze)."""
     activity = await _owned(session, user, activity_id)
     if analyze:
-        await _ensure_analysis_allowed(session, user, activity_id, launch_pipeline)
+        await _claim_analysis(session, user, activity, launch_pipeline)
     if body.surface is not None:
         activity.surface = body.surface
         activity.surface_source = SurfaceSource.USER
@@ -170,7 +172,7 @@ async def update_context(
     await session.commit()
     await session.refresh(activity)
     if analyze:
-        background.add_task(launch_pipeline, user.id, activity.id)
+        background.add_task(launch_pipeline, user.id, activity.id, claimed=True)
     return ActivityRead.model_validate(activity)
 
 
@@ -188,33 +190,40 @@ async def analyze_now(
     """Runs the agent pipeline. `background=true`: 202 now, poll GET /report (UI);
     otherwise waits for the whole pipeline (debug)."""
     activity = await _owned(session, user, activity_id)
-    await _ensure_analysis_allowed(session, user, activity_id, launch_pipeline)
+    await _claim_analysis(session, user, activity, launch_pipeline)
     if run_in_background:
-        background.add_task(launch_pipeline, user.id, activity.id)
+        background.add_task(launch_pipeline, user.id, activity.id, claimed=True)
         response.status_code = status.HTTP_202_ACCEPTED
     else:
-        await run_post_activity_pipeline(session, llm, user, activity)
+        await run_post_activity_pipeline(session, llm, user, activity, claimed=True)
     return await read_report(activity_id, user, session)
 
 
-async def _ensure_analysis_allowed(
-    session: SessionDep, user: User, activity_id: uuid.UUID, launch: PipelineLauncher
+async def _claim_analysis(
+    session: SessionDep, user: User, activity: Activity, launch: PipelineLauncher
 ) -> None:
+    """Claimed before answering: the report shows the run in progress from the first poll."""
     # A 202 with agents off would leave the client polling for a report that never comes
     if agents_disabled(launch):
         raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "Agents are disabled")
-    if await analyses_left(session, user.id, activity_id) == 0:
+    if await analyses_left(session, user.id, activity.id) == 0:
         raise HTTPException(
             status.HTTP_429_TOO_MANY_REQUESTS, "Analysis limit reached for this activity"
         )
+    # A second run would pay twice and use up the re-analysis (the cap counts finished runs)
+    if not await claim_analysis(session, activity.id):
+        raise HTTPException(status.HTTP_409_CONFLICT, "Analysis already running")
 
 
 @router.get("/{activity_id}/report", response_model=ActivityReport)
 async def read_report(
     activity_id: uuid.UUID, user: CurrentUser, session: SessionDep
 ) -> ActivityReport:
-    """Latest pipeline run for the activity (one entry per agent; missing = not run/failed)."""
-    await _owned(session, user, activity_id)
+    """Latest pipeline run for the activity (one entry per agent; missing = not run/failed).
+    While a run is in progress, `analysis_running` and only that run's finished agents."""
+    activity = await _owned(session, user, activity_id)
+    await session.refresh(activity, ["analysis_started_at"])  # claims bypass the identity map
+    started = activity.analysis_started_at if analysis_running(activity) else None
     logs = list(
         (
             await session.exec(
@@ -229,8 +238,15 @@ async def read_report(
         ).all()
     )
     left = await analyses_left(session, user.id, activity_id)
+    if started is not None:  # a re-analysis replaces the previous run: not shown as current
+        logs = [log for log in logs if log.created_at and log.created_at >= started]
     if not logs:
-        return ActivityReport(activity_id=activity_id, pipeline_run_id=None, analyses_left=left)
+        return ActivityReport(
+            activity_id=activity_id,
+            pipeline_run_id=None,
+            analyses_left=left,
+            analysis_running=started is not None,
+        )
     run_id = logs[0].pipeline_run_id
     latest = {log.agent_name: log for log in reversed(logs) if log.pipeline_run_id == run_id}
 
@@ -243,6 +259,7 @@ async def read_report(
         activity_id=activity_id,
         pipeline_run_id=run_id,
         analyses_left=left,
+        analysis_running=started is not None,
         mechanical_load=mechanical,
         plan_adjustment=_typed_run(latest.get(AgentName.TRAINING_PERIODIZATION), PlanAdjustmentRun),
         nutrition_recovery=_typed_run(

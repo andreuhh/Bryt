@@ -53,7 +53,7 @@ async def test_poll_imports_analyzes_and_skips_recent_syncs(
 
     launched: list[tuple[uuid.UUID, uuid.UUID]] = []
 
-    async def _launch(user_id: uuid.UUID, activity_id: uuid.UUID) -> None:
+    async def _launch(user_id: uuid.UUID, activity_id: uuid.UUID, *, claimed: bool = False) -> None:
         launched.append((user_id, activity_id))
 
     @contextlib.asynccontextmanager

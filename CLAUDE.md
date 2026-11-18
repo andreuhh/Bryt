@@ -97,7 +97,14 @@ npm run build && npm run lint
   "Salva e analizza" (`PATCH /context`, avvia la pipeline) oppure "Salta" (`analyze?background=true`).
   Chiudere la modale non avvia nulla (la card "Ultima analisi" offre "Analizza ora"). La sync
   Intervals analizza subito (nessun tag). Il report (`GET /report`) espone gli output tipizzati
-  degli agent; il client fa polling solo dopo aver avviato lui la pipeline.
+  degli agent.
+- **Analisi in corso** (`activities.analysis_started_at`, `pipeline.claim_analysis`): una sola
+  pipeline per corsa, claim atomico (scade dopo 10' se il processo muore). Le richieste
+  dell'atleta (`/analyze`, `PATCH /context?analyze=true`) lo prendono **prima** di rispondere
+  (`claimed=True` al launcher; già preso → 409), poll/sync/webhook lo prende la pipeline.
+  `GET /report` espone `analysis_running` (e nasconde la run precedente durante una rianalisi):
+  il client fa polling e mostra l'avanzamento chiunque abbia avviato l'analisi
+  (`useActivityReport().inProgress`), poi rinfresca piano e workout.
 - **Tag modificati dopo** (pagina attività, modale in modalità `edit`): "Salva" è disattivato se
   nulla cambia (confronto per valore); salvare rifà l'analisi (`PATCH /context?analyze=true`)
   finché il tetto lo consente, poi salva soltanto. La superficie è inviata solo se l'atleta la
@@ -160,7 +167,7 @@ npm run build && npm run lint
 | `training_plans` | `GENERATING`→`ACTIVE` (o `FAILED` + `generation_error`); `blocks` JSONB = `list[PlanBlock]`; `last_refined_on` |
 | `workouts` | `PLANNED`/`COMPLETED`/`MODIFIED`; `detail_level` `CONFIRMED`/`PROVISIONAL`; `is_key_session`; `structure` JSONB = `list[WorkoutStep]`; `original_snapshot` = prima versione |
 | `workout_revisions` | cronologia (`APPLIED`) e proposte (`PENDING` → `APPLIED`/`REJECTED`/`SUPERSEDED`) con `before`/`after` = `WorkoutDraft` e `reason` |
-| `activities` | dedup `UNIQUE(user_id, source, external_id)` e `UNIQUE(user_id, fit_sha256)`; `context_tags` JSONB = `ContextTags` |
+| `activities` | dedup `UNIQUE(user_id, source, external_id)` e `UNIQUE(user_id, fit_sha256)`; `context_tags` JSONB = `ContextTags`; `analysis_started_at` = pipeline in corso |
 | `activity_streams` | serie temporali 1:1 con activity, array allineati su `elapsed_s` |
 | `daily_wellness` | check-in mattutino: `UNIQUE(user_id, day)`, `sleep_hours` (fasce: 5 = ≤5, 9 = 9+), `feeling` 1-5; entrambi facoltativi (mancante = sconosciuto) |
 | `agent_execution_logs` | input/output JSON, `pipeline_run_id` per la cascata, token e `cost_usd`, feedback 👍/👎 |

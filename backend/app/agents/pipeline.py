@@ -12,11 +12,13 @@ All steps share one pipeline_run_id in AgentExecutionLog.
 
 import logging
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
+from typing import Protocol
 from zoneinfo import ZoneInfo
 
-from sqlmodel import func, select
+from sqlmodel import col, func, or_, select, update
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from app.agents.context import MissingProfileError, local_today
@@ -43,10 +45,71 @@ class PipelineResult:
     errors: list[str] = field(default_factory=list)
 
 
+# A crashed run (process killed mid-pipeline) never releases its claim: it expires instead
+ANALYSIS_STALE_AFTER = timedelta(minutes=10)
+
+
+def analysis_running(activity: Activity, now: datetime | None = None) -> bool:
+    started = activity.analysis_started_at
+    return started is not None and (now or datetime.now(UTC)) - started < ANALYSIS_STALE_AFTER
+
+
+async def claim_analysis(session: AsyncSession, activity_id: uuid.UUID) -> bool:
+    """Atomic: one pipeline per activity at a time (backend poll, sync, button, other tabs).
+    DB clock, like the logs' created_at that the report compares it with."""
+    result = await session.exec(
+        update(Activity)
+        .where(
+            col(Activity.id) == activity_id,
+            or_(
+                col(Activity.analysis_started_at).is_(None),
+                col(Activity.analysis_started_at) < func.now() - ANALYSIS_STALE_AFTER,
+            ),
+        )
+        .values(analysis_started_at=func.now())
+        .execution_options(synchronize_session=False)  # loaded objects are not refreshed
+    )
+    await session.commit()
+    return bool(result.rowcount)
+
+
+async def release_analysis(session: AsyncSession, activity_id: uuid.UUID) -> None:
+    await session.exec(
+        update(Activity)
+        .where(col(Activity.id) == activity_id)
+        .values(analysis_started_at=None)
+        .execution_options(synchronize_session=False)
+    )
+    await session.commit()
+
+
 async def run_post_activity_pipeline(
-    session: AsyncSession, llm: LLMClient, user: User, activity: Activity
+    session: AsyncSession,
+    llm: LLMClient,
+    user: User,
+    activity: Activity,
+    *,
+    claimed: bool = False,
 ) -> PipelineResult:
+    """`claimed`: the caller already holds the activity's claim (athlete requests claim it before
+    answering, so the report shows the run in progress right away)."""
     result = PipelineResult(run_id=uuid.uuid4())
+    if not claimed and not await claim_analysis(session, activity.id):
+        result.errors.append("analysis already running")
+        return result
+    try:
+        await _run_agents(session, llm, user, activity, result)
+    finally:
+        try:
+            await release_analysis(session, activity.id)
+        except Exception:  # the claim expires on its own (ANALYSIS_STALE_AFTER)
+            logger.exception("Could not release the analysis claim of activity %s", activity.id)
+    return result
+
+
+async def _run_agents(
+    session: AsyncSession, llm: LLMClient, user: User, activity: Activity, result: PipelineResult
+) -> None:
     reanalysis = await completed_analyses(session, user.id, activity.id) > 0
     try:
         result.mechanical, _ = await analyze_activity(
@@ -54,7 +117,7 @@ async def run_post_activity_pipeline(
         )
     except (AgentError, MissingProfileError) as exc:
         result.errors.append(f"mechanical_load: {exc}")
-        return result  # nothing downstream makes sense without the analysis
+        return  # nothing downstream makes sense without the analysis
 
     # A re-analysis replaces the previous one: undo its plan changes before deciding again
     await revert_activity_adjustments(session, activity.id, local_today(user))
@@ -92,10 +155,12 @@ async def run_post_activity_pipeline(
         )
     except AgentError as exc:
         result.errors.append(f"nutrition_recovery: {exc}")
-    return result
 
 
-PipelineLauncher = Callable[[uuid.UUID, uuid.UUID], Awaitable[None]]
+class PipelineLauncher(Protocol):
+    def __call__(
+        self, user_id: uuid.UUID, activity_id: uuid.UUID, *, claimed: bool = False
+    ) -> Awaitable[None]: ...
 
 
 async def completed_analyses(
@@ -122,21 +187,25 @@ async def analyses_left(session: AsyncSession, user_id: uuid.UUID, activity_id: 
     return max(get_settings().max_analyses_per_activity - done, 0)
 
 
-async def run_pipeline_in_background(user_id: uuid.UUID, activity_id: uuid.UUID) -> None:
+async def run_pipeline_in_background(
+    user_id: uuid.UUID, activity_id: uuid.UUID, *, claimed: bool = False
+) -> None:
     """BackgroundTasks entry point: own session, never raises."""
     async with SessionFactory() as session:
         user = await session.get(User, user_id)
         activity = await session.get(Activity, activity_id)
         if user is None or activity is None or activity.user_id != user_id:
             return
-        result = await run_post_activity_pipeline(session, get_llm(), user, activity)
+        result = await run_post_activity_pipeline(
+            session, get_llm(), user, activity, claimed=claimed
+        )
         if result.errors:
             logger.warning(
                 "Pipeline %s for activity %s: %s", result.run_id, activity_id, result.errors
             )
 
 
-async def _noop(user_id: uuid.UUID, activity_id: uuid.UUID) -> None:
+async def _noop(user_id: uuid.UUID, activity_id: uuid.UUID, *, claimed: bool = False) -> None:
     return None
 
 
